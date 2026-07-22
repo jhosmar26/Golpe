@@ -1,0 +1,13 @@
+# Render.com — plan Free (Web Service)
+services:
+  - type: web
+    name: golpe
+    runtime: node
+    plan: free
+    region: oregon
+    buildCommand: corepack enable && pnpm install --frozen-lockfile
+    startCommand: node server.js
+    healthCheckPath: /
+    envVars:
+      - key: NODE_VERSION
+        value: "20"

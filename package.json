@@ -1,0 +1,20 @@
+{
+  "name": "golpeado-game",
+  "version": "1.0.0",
+  "description": "Golpeado — multijugador en tiempo real",
+  "type": "module",
+  "main": "server.js",
+  "packageManager": "pnpm@10.15.0",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "engines": {
+    "node": ">=18",
+    "pnpm": ">=9"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "socket.io": "^4.8.1"
+  }
+}
