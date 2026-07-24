@@ -9,6 +9,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { Server } from 'socket.io';
 import { GolpeadoGame } from './game.js';
+import { jugarTurnoBot } from './bot.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -17,6 +18,7 @@ const PORT = process.env.PORT || 3080;
 const HOST = process.env.HOST || '0.0.0.0';
 const LOBBY_MIN = 2;
 const LOBBY_MAX = 6;
+const BOT_NOMBRES = ['Bot Ana', 'Bot Luis', 'Bot Sofía', 'Bot Diego', 'Bot Marta'];
 
 const app = express();
 const server = http.createServer(app);
@@ -47,7 +49,12 @@ function obtenerSalaDeSocket(socket) {
     return rooms.get(code) || null;
 }
 
+function jugadoresListos(room) {
+    return room.players.filter(p => p.esBot || p.conectado);
+}
+
 function serializarLobby(room, socketId) {
+    const listos = jugadoresListos(room);
     return {
         code: room.code,
         status: room.status,
@@ -58,18 +65,20 @@ function serializarLobby(room, socketId) {
             nombre: p.nombre,
             socketId: p.socketId,
             conectado: p.conectado,
-            esYo: p.socketId === socketId,
-            esHost: p.socketId === room.hostId
+            esBot: !!p.esBot,
+            esYo: !p.esBot && p.socketId === socketId,
+            esHost: !p.esBot && p.socketId === room.hostId
         })),
         minPlayers: LOBBY_MIN,
         maxPlayers: LOBBY_MAX,
-        puedeEmpezar: room.players.filter(p => p.conectado).length >= LOBBY_MIN
+        puedeEmpezar: listos.length >= LOBBY_MIN,
+        puedeAgregarBot: listos.length < LOBBY_MAX
     };
 }
 
 function emitirLobby(room) {
     for (const p of room.players) {
-        if (!p.conectado) continue;
+        if (p.esBot || !p.conectado) continue;
         io.to(p.socketId).emit('roomState', serializarLobby(room, p.socketId));
     }
 }
@@ -77,14 +86,80 @@ function emitirLobby(room) {
 function emitirGameState(room) {
     if (!room.game) return;
     for (const p of room.players) {
-        if (!p.conectado || p.playerIndex == null) continue;
+        if (p.esBot || !p.conectado || p.playerIndex == null) continue;
         const vista = room.game.serializarParaJugador(p.playerIndex);
         io.to(p.socketId).emit('gameState', vista);
     }
 }
 
 function encontrarJugador(room, socketId) {
-    return room.players.find(p => p.socketId === socketId) || null;
+    return room.players.find(p => !p.esBot && p.socketId === socketId) || null;
+}
+
+function crearBot(room) {
+    const usados = new Set(room.players.map(p => p.nombre));
+    const nombre = BOT_NOMBRES.find(n => !usados.has(n)) || `Bot ${room.players.length + 1}`;
+    const bot = {
+        socketId: `bot-${room.code}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        nombre,
+        conectado: true,
+        esBot: true,
+        playerIndex: null
+    };
+    room.players.push(bot);
+    return bot;
+}
+
+function iniciarPartidaEnSala(room) {
+    const listos = jugadoresListos(room);
+    room.players = listos;
+    room.players.forEach((p, idx) => {
+        p.playerIndex = idx;
+    });
+
+    const nombres = room.players.map(p => p.nombre);
+    room.game = new GolpeadoGame();
+    room.game.inicializarJuego(nombres);
+    room.status = 'playing';
+
+    emitirLobby(room);
+    emitirGameState(room);
+    programarTurnosBot(room);
+    console.log(`[Sala ${room.code}] partida iniciada (${nombres.join(', ')})`);
+}
+
+function programarTurnosBot(room) {
+    if (room._botTimer) {
+        clearTimeout(room._botTimer);
+        room._botTimer = null;
+    }
+    if (!room.game || room.game.juegoTerminado || room.status !== 'playing') return;
+
+    const actual = room.players.find(p => p.playerIndex === room.game.turnoActual);
+    if (!actual?.esBot) return;
+
+    room._botTimer = setTimeout(() => {
+        room._botTimer = null;
+        ejecutarTurnoBot(room);
+    }, 700 + Math.floor(Math.random() * 800));
+}
+
+function ejecutarTurnoBot(room) {
+    if (!room.game || room.game.juegoTerminado || room.status !== 'playing') return;
+
+    const idx = room.game.turnoActual;
+    const actual = room.players.find(p => p.playerIndex === idx);
+    if (!actual?.esBot) return;
+
+    jugarTurnoBot(room.game, idx);
+
+    if (room.game.juegoTerminado) {
+        room.status = 'finished';
+        emitirLobby(room);
+    }
+
+    emitirGameState(room);
+    programarTurnosBot(room);
 }
 
 io.on('connection', (socket) => {
@@ -101,9 +176,11 @@ io.on('connection', (socket) => {
                 socketId: socket.id,
                 nombre: nombreLimpio,
                 conectado: true,
+                esBot: false,
                 playerIndex: null
             }],
-            game: null
+            game: null,
+            _botTimer: null
         };
         rooms.set(code, room);
         socket.data.roomCode = code;
@@ -130,7 +207,7 @@ io.on('connection', (socket) => {
             responder({ ok: false, error: 'La partida ya comenzó.' });
             return;
         }
-        if (room.players.filter(p => p.conectado).length >= LOBBY_MAX) {
+        if (jugadoresListos(room).length >= LOBBY_MAX) {
             responder({ ok: false, error: 'La sala está llena.' });
             return;
         }
@@ -140,6 +217,7 @@ io.on('connection', (socket) => {
             socketId: socket.id,
             nombre: nombreLimpio,
             conectado: true,
+            esBot: false,
             playerIndex: null
         });
         socket.data.roomCode = codeNorm;
@@ -148,6 +226,67 @@ io.on('connection', (socket) => {
         emitirLobby(room);
         responder({ ok: true, room: serializarLobby(room, socket.id) });
         console.log(`[Sala ${codeNorm}] ${nombreLimpio} se unió`);
+    });
+
+    socket.on('addBot', (ack) => {
+        const room = obtenerSalaDeSocket(socket);
+        const responder = (data) => {
+            if (typeof ack === 'function') ack(data);
+        };
+        if (!room) {
+            responder({ ok: false, error: 'No estás en una sala.' });
+            return;
+        }
+        if (room.hostId !== socket.id) {
+            responder({ ok: false, error: 'Solo el anfitrión puede agregar bots.' });
+            return;
+        }
+        if (room.status !== 'lobby') {
+            responder({ ok: false, error: 'La partida ya comenzó.' });
+            return;
+        }
+        if (jugadoresListos(room).length >= LOBBY_MAX) {
+            responder({ ok: false, error: 'La sala está llena.' });
+            return;
+        }
+
+        const bot = crearBot(room);
+        emitirLobby(room);
+        responder({ ok: true });
+        console.log(`[Sala ${room.code}] se agregó ${bot.nombre}`);
+    });
+
+    socket.on('playVsBots', ({ nombre, numBots = 1 } = {}, ack) => {
+        const responder = (data) => {
+            if (typeof ack === 'function') ack(data);
+        };
+        const nombreLimpio = String(nombre || '').trim() || 'Jugador';
+        const n = Math.max(1, Math.min(Number(numBots) || 1, LOBBY_MAX - 1));
+
+        const code = generarCodigoSala();
+        const room = {
+            code,
+            hostId: socket.id,
+            status: 'lobby',
+            players: [{
+                socketId: socket.id,
+                nombre: nombreLimpio,
+                conectado: true,
+                esBot: false,
+                playerIndex: null
+            }],
+            game: null,
+            _botTimer: null
+        };
+        for (let i = 0; i < n; i++) crearBot(room);
+
+        rooms.set(code, room);
+        socket.data.roomCode = code;
+        socket.join(code);
+
+        iniciarPartidaEnSala(room);
+        responder({ ok: true, room: serializarLobby(room, socket.id) });
+        console.log(`[Sala ${code}] vs bots (${n}) para ${nombreLimpio}`);
     });
 
     socket.on('leaveRoom', () => {
@@ -172,27 +311,13 @@ io.on('connection', (socket) => {
             return;
         }
 
-        const conectados = room.players.filter(p => p.conectado);
-        if (conectados.length < LOBBY_MIN) {
-            responder({ ok: false, error: `Se necesitan al menos ${LOBBY_MIN} jugadores.` });
+        if (jugadoresListos(room).length < LOBBY_MIN) {
+            responder({ ok: false, error: `Se necesitan al menos ${LOBBY_MIN} jugadores (personas o bots).` });
             return;
         }
 
-        // Compactar lista a solo conectados al iniciar
-        room.players = conectados;
-        room.players.forEach((p, idx) => {
-            p.playerIndex = idx;
-        });
-
-        const nombres = room.players.map(p => p.nombre);
-        room.game = new GolpeadoGame();
-        room.game.inicializarJuego(nombres);
-        room.status = 'playing';
-
-        emitirLobby(room);
-        emitirGameState(room);
+        iniciarPartidaEnSala(room);
         responder({ ok: true });
-        console.log(`[Sala ${room.code}] partida iniciada (${nombres.join(', ')})`);
     });
 
     socket.on('gameAction', (payload = {}, ack) => {
@@ -217,19 +342,16 @@ io.on('connection', (socket) => {
         const type = payload.type;
         let ok = false;
 
-        // Reordenar mano: local al jugador, sin exigir turno ni notificar a rivales
         if (type === 'REORDENAR_MANO') {
             ok = game.reordenarMano(payload.ordenIds || [], playerIndex);
             if (!ok) {
                 responder({ ok: false, error: 'No se pudo reordenar la mano.' });
                 return;
             }
-            // Solo confirmación al que reordenó; no emitir gameState a la sala
             responder({ ok: true });
             return;
         }
 
-        // Autoridad de turno (excepto si el juego ya terminó)
         if (!game.juegoTerminado && !game.esTurnoDe(playerIndex)) {
             const msg = 'No es tu turno.';
             socket.emit('actionError', { message: msg });
@@ -259,7 +381,6 @@ io.on('connection', (socket) => {
             const msg = 'Acción inválida.';
             socket.emit('actionError', { message: msg });
             responder({ ok: false, error: msg });
-            // Aun así sincronizar por si el estado cambió parcialmente
             emitirGameState(room);
             return;
         }
@@ -271,6 +392,7 @@ io.on('connection', (socket) => {
 
         emitirGameState(room);
         responder({ ok: true });
+        programarTurnosBot(room);
     });
 
     socket.on('returnToLobby', (ack) => {
@@ -287,6 +409,10 @@ io.on('connection', (socket) => {
             return;
         }
 
+        if (room._botTimer) {
+            clearTimeout(room._botTimer);
+            room._botTimer = null;
+        }
         room.game = null;
         room.status = 'lobby';
         room.players.forEach(p => {
@@ -312,7 +438,7 @@ function salirDeSala(socket, porDesconexion = false) {
         return;
     }
 
-    const idx = room.players.findIndex(p => p.socketId === socket.id);
+    const idx = room.players.findIndex(p => !p.esBot && p.socketId === socket.id);
     if (idx === -1) {
         socket.data.roomCode = null;
         return;
@@ -322,17 +448,18 @@ function salirDeSala(socket, porDesconexion = false) {
 
     if (room.status === 'lobby') {
         room.players.splice(idx, 1);
-        if (room.players.length === 0) {
+        const humanos = room.players.filter(p => !p.esBot);
+        if (humanos.length === 0) {
+            if (room._botTimer) clearTimeout(room._botTimer);
             rooms.delete(code);
             console.log(`[Sala ${code}] eliminada (vacía)`);
         } else {
             if (room.hostId === socket.id) {
-                room.hostId = room.players[0].socketId;
+                room.hostId = humanos[0].socketId;
             }
             emitirLobby(room);
         }
     } else {
-        // En partida: marcar desconectado; no eliminar asiento
         jugador.conectado = false;
         if (room.game) {
             room.game.log(`${jugador.nombre} se desconectó.`);
@@ -340,10 +467,13 @@ function salirDeSala(socket, porDesconexion = false) {
         }
         emitirLobby(room);
 
-        const alguienConectado = room.players.some(p => p.conectado);
-        if (!alguienConectado) {
+        const alguienHumano = room.players.some(p => !p.esBot && p.conectado);
+        if (!alguienHumano) {
+            if (room._botTimer) clearTimeout(room._botTimer);
             rooms.delete(code);
             console.log(`[Sala ${code}] eliminada (todos desconectados)`);
+        } else {
+            programarTurnosBot(room);
         }
     }
 

@@ -148,11 +148,14 @@ function renderHome() {
                 <input type="text" id="playerName" value="Jugador" placeholder="Ej. Carlos" maxlength="24">
             </div>
 
-            <button id="btnCreateRoom" class="btn-primary">Crear sala</button>
+            <button id="btnPlayVsBots" class="btn-primary">Jugar contra bots</button>
+            <p class="text-muted room-hint">Partida rápida sola: tú + 1 bot</p>
 
-            <div class="lobby-divider"><span>o únete con un código</span></div>
+            <div class="lobby-divider"><span>o juega con personas</span></div>
 
-            <div class="form-group">
+            <button id="btnCreateRoom" class="btn-secondary btn-add-player">Crear sala</button>
+
+            <div class="form-group" style="margin-top: 1rem;">
                 <label for="roomCode">Código de sala (4 dígitos)</label>
                 <input type="text" id="roomCode" inputmode="numeric" maxlength="4" placeholder="1234" class="room-code-input">
             </div>
@@ -168,6 +171,14 @@ function renderHome() {
         el.hidden = !msg;
         el.textContent = msg || '';
     };
+
+    document.getElementById('btnPlayVsBots').addEventListener('click', () => {
+        const nombre = document.getElementById('playerName').value.trim() || 'Jugador';
+        showError('');
+        socket.emit('playVsBots', { nombre, numBots: 1 }, (res) => {
+            if (!res?.ok) showError(res?.error || 'No se pudo iniciar vs bots');
+        });
+    });
 
     document.getElementById('btnCreateRoom').addEventListener('click', () => {
         const nombre = document.getElementById('playerName').value.trim() || 'Anfitrión';
@@ -204,8 +215,9 @@ function renderRoom() {
                 <span class="player-item-name">${escapeHtml(p.nombre)}</span>
                 ${p.esHost ? '<span class="host-badge">Anfitrión</span>' : ''}
                 ${p.esYo ? '<span class="you-badge">Tú</span>' : ''}
+                ${p.esBot ? '<span class="bot-badge">Bot</span>' : ''}
             </div>
-            <span class="player-cards-count">${p.conectado ? 'Listo' : 'Ausente'}</span>
+            <span class="player-cards-count">${p.esBot ? 'Bot' : (p.conectado ? 'Listo' : 'Ausente')}</span>
         </div>
     `).join('');
 
@@ -217,7 +229,7 @@ function renderRoom() {
             <div class="room-code-display">
                 <span class="room-code-label">Código</span>
                 <span class="room-code-value">${escapeHtml(roomState.code)}</span>
-                <p class="room-code-hint">Compártelo para que se unan desde otros dispositivos</p>
+                <p class="room-code-hint">Compártelo para personas, o agrega bots para practicar</p>
             </div>
 
             <div class="panel room-players-panel">
@@ -226,10 +238,13 @@ function renderRoom() {
             </div>
 
             ${roomState.yoSoyHost ? `
+                <button id="btnAddBot" class="btn-secondary btn-add-player" ${roomState.puedeAgregarBot ? '' : 'disabled'}>
+                    + Agregar bot
+                </button>
                 <button id="btnStartGame" class="btn-primary" ${roomState.puedeEmpezar ? '' : 'disabled'}>
                     Comenzar partida
                 </button>
-                <p class="text-muted room-hint">${roomState.puedeEmpezar ? 'Todos listos' : `Mínimo ${roomState.minPlayers} jugadores`}</p>
+                <p class="text-muted room-hint">${roomState.puedeEmpezar ? 'Listo para empezar' : `Mínimo ${roomState.minPlayers} (personas o bots)`}</p>
             ` : `
                 <p class="text-muted room-hint">Esperando a que el anfitrión inicie la partida…</p>
             `}
@@ -246,6 +261,19 @@ function renderRoom() {
         screen = 'home';
         render();
     });
+
+    const btnAddBot = document.getElementById('btnAddBot');
+    if (btnAddBot) {
+        btnAddBot.addEventListener('click', () => {
+            const errEl = document.getElementById('roomError');
+            socket.emit('addBot', (res) => {
+                if (!res?.ok) {
+                    errEl.hidden = false;
+                    errEl.textContent = res?.error || 'No se pudo agregar bot';
+                }
+            });
+        });
+    }
 
     const btnStart = document.getElementById('btnStartGame');
     if (btnStart) {
