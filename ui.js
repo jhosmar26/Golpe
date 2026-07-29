@@ -4,9 +4,13 @@
  */
 
 import { esGrupoValido } from './game.js';
+import { playSound, bindAudioUnlock } from './sounds.js';
+import { DEBUG_SCENARIOS } from './debug-scenarios.js';
 
 const socket = window.io();
 const appEl = document.getElementById('app');
+
+bindAudioUnlock();
 
 /** @type {'home'|'room'|'game'|'victory'} */
 let screen = 'home';
@@ -14,6 +18,11 @@ let screen = 'home';
 let roomState = null;
 /** @type {object|null} */
 let gameState = null;
+/** @type {object|null} Snapshot previo para detectar eventos de sonido */
+let prevGameSnapshot = null;
+let victoriaTransitionPending = false;
+/** Evita re-render completo a mitad de un drag (deja el fantasma “pegado”). */
+let renderDiferidoPorDrag = false;
 
 let cartasSeleccionadasIds = [];
 let ignorarClickTrasDrag = false;
@@ -46,6 +55,14 @@ function miMano() {
     if (!gameState) return [];
     const yo = gameState.jugadores.find(j => j.esYo);
     return yo?.mano || [];
+}
+
+/** Puede iniciar robo del mazo (click o drag). */
+function puedeRobarDeMazo() {
+    if (!gameState || gameState.juegoTerminado) return false;
+    if (!gameState.esMiTurno || gameState.faseActual !== 'ROBO') return false;
+    // Robo directo o reciclaje (descarte con más de 1 carta)
+    return gameState.mazoRoboCount > 0 || (gameState.descarteCount || 0) > 1;
 }
 
 function enviarAccion(type, payload = {}) {
@@ -92,8 +109,18 @@ socket.on('roomState', (state) => {
 });
 
 socket.on('gameState', (state) => {
+    const prev = gameState;
+
+    // Si llegamos a mitad de un reorden, conservar el orden local (mismas cartas)
+    if (state && (pointerDrag || animandoFlip) && prev) {
+        preservarOrdenManoLocal(prev, state);
+    }
+
     gameState = state;
     if (!state) {
+        prevGameSnapshot = null;
+        cancelarInteraccionPointer();
+        renderDiferidoPorDrag = false;
         if (roomState && roomState.status === 'lobby') {
             screen = 'room';
         }
@@ -105,16 +132,36 @@ socket.on('gameState', (state) => {
     const idsMano = new Set(miMano().map(c => c.id));
     cartasSeleccionadasIds = cartasSeleccionadasIds.filter(id => idsMano.has(id));
 
+    processGameSounds(prev, state);
+
     if (state.juegoTerminado) {
+        cancelarInteraccionPointer();
+        renderDiferidoPorDrag = false;
+        if (screen !== 'victory' && !victoriaTransitionPending) {
+            startVictoryTransition();
+            return;
+        }
         screen = 'victory';
-    } else {
-        screen = 'game';
+        render();
+        return;
     }
+
+    victoriaTransitionPending = false;
+    screen = 'game';
+
+    // No destruir el DOM de la mano mientras se arrastra / anima FLIP
+    if (pointerDrag || animandoFlip) {
+        renderDiferidoPorDrag = true;
+        actualizarTableroSinMano();
+        return;
+    }
+
     render();
 });
 
 socket.on('actionError', ({ message }) => {
     lastError = message || 'Acción inválida';
+    playSound('error');
     const toast = document.getElementById('actionToast');
     if (toast) {
         toast.textContent = lastError;
@@ -125,11 +172,128 @@ socket.on('actionError', ({ message }) => {
     }
 });
 
+function snapshotFromState(state) {
+    if (!state) return null;
+    const histLen = Array.isArray(state.historial) ? state.historial.length : 0;
+    const lastMsg = histLen ? state.historial[histLen - 1]?.mensaje : '';
+    const gruposCount = (state.jugadores || []).reduce(
+        (n, j) => n + ((j.gruposExpuestos && j.gruposExpuestos.length) || 0),
+        0
+    );
+    return {
+        turnoActual: state.turnoActual,
+        faseActual: state.faseActual,
+        mazoRoboCount: state.mazoRoboCount,
+        descarteCount: state.descarteCount,
+        juegoTerminado: state.juegoTerminado,
+        ganadorId: state.ganadorId,
+        histLen,
+        lastMsg: String(lastMsg || ''),
+        gruposCount,
+        esMiTurno: !!state.esMiTurno
+    };
+}
+
+function processGameSounds(prevState, nextState) {
+    const next = snapshotFromState(nextState);
+    const prev = prevGameSnapshot || snapshotFromState(prevState);
+    const prevHistLen = prev?.histLen || 0;
+    prevGameSnapshot = next;
+    if (!prev || !next) {
+        if (next && !next.juegoTerminado) playSound('start');
+        return;
+    }
+
+    // Primera recepción de partida activa
+    if (prevState == null && nextState && !next.juegoTerminado) {
+        playSound('start');
+        return;
+    }
+
+    if (!prev.juegoTerminado && next.juegoTerminado) {
+        playHistorialSounds(nextState.historial || [], prevHistLen, { skipTurn: true });
+        const yo = nextState.jugadores?.find(j => j.esYo);
+        const gane = yo && yo.id === next.ganadorId;
+        window.setTimeout(() => playSound(gane ? 'win' : 'lose'), 220);
+        return;
+    }
+
+    playHistorialSounds(nextState.historial || [], prevHistLen, { skipTurn: false });
+
+    // Fallback si no llegó historial nuevo pero cambió el turno
+    if (next.histLen <= prevHistLen && next.turnoActual !== prev.turnoActual && !next.juegoTerminado) {
+        playSound('turn');
+    } else if (next.histLen <= prevHistLen && next.gruposCount > prev.gruposCount) {
+        playSound('meld');
+    }
+}
+
+function playHistorialSounds(historial, fromIndex, { skipTurn }) {
+    const nuevos = historial.slice(fromIndex);
+    let playedAction = false;
+    for (const h of nuevos) {
+        const msg = String(h?.mensaje || '');
+        if (!msg || msg.startsWith('[Secreto]')) continue;
+
+        if (msg.includes('robó una carta del mazo')) {
+            playSound('draw');
+            playedAction = true;
+        } else if (msg.includes('robó') && msg.includes('del descarte')) {
+            playSound('drawDiscard');
+            playedAction = true;
+        } else if (msg.includes('descartó')) {
+            playSound('discard');
+            playedAction = true;
+        } else if (msg.includes('expuso el grupo')) {
+            playSound('meld');
+            playedAction = true;
+        } else if (msg.includes('recicló') || msg.includes('Mazo agotado')) {
+            playSound('recycle');
+            playedAction = true;
+        } else if (msg.includes('cantado "STOP"') || msg.includes('ha cantado')) {
+            playSound('stop');
+            playedAction = true;
+        } else if (msg.startsWith('Partida iniciada')) {
+            playSound('start');
+            playedAction = true;
+        } else if (!skipTurn && msg.startsWith('Turno de ')) {
+            // Solo turno “puro” si no hubo otra acción en el mismo batch… o siempre avisar
+            playSound('turn');
+        }
+    }
+    return playedAction;
+}
+
+function startVictoryTransition() {
+    victoriaTransitionPending = true;
+    const current = appEl.querySelector('.game-container, .overlay-screen') || appEl.firstElementChild;
+    if (!current) {
+        screen = 'victory';
+        victoriaTransitionPending = false;
+        render();
+        return;
+    }
+
+    appEl.classList.add('page-transitioning');
+    current.classList.add('page-exit');
+    window.setTimeout(() => {
+        screen = 'victory';
+        render();
+        const box = appEl.querySelector('.overlay-screen');
+        if (box) box.classList.add('page-enter');
+        appEl.classList.remove('page-transitioning');
+        victoriaTransitionPending = false;
+        window.setTimeout(() => box?.classList.remove('page-enter'), 700);
+    }, 380);
+}
+
 // ==========================================
 // RENDER ROUTER
 // ==========================================
 
 function render() {
+    // Siempre: evita fantasmas de drag pegados tras re-render / victoria
+    limpiarFantasmaDragHuerfano();
     if (screen === 'home') return renderHome();
     if (screen === 'room') return renderRoom();
     if (screen === 'victory') return renderVictoryScreen();
@@ -137,32 +301,186 @@ function render() {
     renderHome();
 }
 
+/**
+ * Conserva el orden de la mano local al recibir un state remoto
+ * (misma composición de ids) para no romper un reorden en curso.
+ */
+function preservarOrdenManoLocal(prevState, nextState) {
+    const yoPrev = prevState.jugadores?.find(j => j.esYo);
+    const yoNext = nextState.jugadores?.find(j => j.esYo);
+    if (!yoPrev?.mano?.length || !yoNext?.mano?.length) return;
+    if (yoPrev.mano.length !== yoNext.mano.length) return;
+
+    const byId = new Map(yoNext.mano.map(c => [String(c.id), c]));
+    const idsNext = new Set(byId.keys());
+    if (!yoPrev.mano.every(c => idsNext.has(String(c.id)))) return;
+
+    yoNext.mano = yoPrev.mano.map(c => byId.get(String(c.id)));
+}
+
+/** Actualiza bandeja / historial / pilas sin tocar #handCards. */
+function actualizarTableroSinMano() {
+    if (!gameState || screen !== 'game') return;
+    if (!document.getElementById('handCards')) {
+        // No hay tablero montado: hace falta render completo cuando se pueda
+        return;
+    }
+
+    const fase = gameState.faseActual;
+    const esMiTurno = gameState.esMiTurno;
+    const jugadorTurno = gameState.jugadores.find(j => j.id === gameState.turnoActual);
+    const puedeInteractuar = esMiTurno && !gameState.juegoTerminado;
+
+    const badge = document.querySelector('.turn-badge');
+    const nameEl = document.querySelector('.turn-player-name');
+    const phaseEl = document.querySelector('.turn-phase');
+    if (badge) badge.textContent = esMiTurno ? 'Tu turno' : 'Turno';
+    if (nameEl) nameEl.textContent = jugadorTurno?.nombre || '';
+    if (phaseEl) {
+        phaseEl.innerHTML = esMiTurno
+            ? `Fase: <strong>${fase === 'ROBO' ? 'ROBAR CARTA' : 'DESCARTAR CARTA'}</strong>`
+            : `<strong>Esperando a ${escapeHtml(jugadorTurno?.nombre || 'otro jugador')}…</strong>`;
+    }
+
+    const actions = document.querySelector('.player-actions');
+    if (actions) actions.classList.toggle('actions-locked', !puedeInteractuar);
+
+    const playersList = document.querySelector('.players-list');
+    if (playersList) {
+        playersList.innerHTML = gameState.jugadores.map(jugador => `
+            <div class="player-item ${jugador.id === gameState.turnoActual ? 'active' : ''}">
+                <div class="player-name-wrapper">
+                    <span class="player-item-name">${escapeHtml(jugador.nombre)}${jugador.esYo ? ' (tú)' : ''}</span>
+                </div>
+                <span class="player-cards-count">${jugador.cartasCount} cartas</span>
+            </div>
+        `).join('');
+    }
+
+    const historyList = document.querySelector('.history-list');
+    if (historyList) {
+        historyList.innerHTML = gameState.historial.map(item => `
+            <div class="history-item">${escapeHtml(item.mensaje)}</div>
+        `).reverse().join('');
+    }
+
+    const deckPileEl = document.getElementById('deckPile');
+    if (deckPileEl) {
+        const parent = deckPileEl.parentElement;
+        const countLabel = parent?.querySelector('.text-muted');
+        if (countLabel) countLabel.textContent = `Quedan: ${gameState.mazoRoboCount}`;
+    }
+
+    const discardPileEl = document.getElementById('discardPile');
+    if (discardPileEl) {
+        if (gameState.descarteTop) {
+            discardPileEl.innerHTML = renderCardHtml(gameState.descarteTop);
+        } else {
+            discardPileEl.innerHTML = `<div class="pile-empty">Vacío</div>`;
+        }
+    }
+
+    const meldsContainerEl = document.getElementById('meldsContainer');
+    if (meldsContainerEl) {
+        const todosGrupos = gameState.jugadores.reduce((all, player) => {
+            return all.concat((player.gruposExpuestos || []).map(g => ({ cartas: g, owner: player.nombre })));
+        }, []);
+        if (todosGrupos.length > 0) {
+            meldsContainerEl.innerHTML = todosGrupos.map(group => `
+                <div class="meld-group">
+                    <span class="meld-owner">${escapeHtml(group.owner)}</span>
+                    <div class="meld-cards">
+                        ${group.cartas.map(card => renderCardHtml(card, false)).join('')}
+                    </div>
+                </div>
+            `).join('');
+        } else {
+            meldsContainerEl.innerHTML = `<span class="text-muted" style="font-size: 0.9rem;">No hay grupos expuestos en la mesa aún.</span>`;
+        }
+    }
+
+    actualizarEstadoBotones(puedeInteractuar);
+}
+
+function flushRenderDiferido() {
+    if (!renderDiferidoPorDrag) return;
+    if (pointerDrag || animandoFlip) return;
+    renderDiferidoPorDrag = false;
+    if (screen === 'game' && gameState && !gameState.juegoTerminado) {
+        render();
+    } else if (gameState?.juegoTerminado) {
+        screen = 'victory';
+        render();
+    }
+}
+
+/** Quita fantasma huérfano si un re-render antiguo lo dejó en el body. */
+function limpiarFantasmaDragHuerfano() {
+    document.querySelectorAll('.card-drag-ghost').forEach(el => el.remove());
+    document.body.classList.remove('is-reordering-cards', 'is-drawing-from-deck');
+    document.getElementById('handCards')?.classList.remove('hand-drop-hover');
+}
+
+/** Cancela drag de mano o mazo y limpia el DOM asociado. */
+function cancelarInteraccionPointer() {
+    if (pointerDrag?.type === 'deck') {
+        cancelarDragDeck();
+    } else if (pointerDrag?.type === 'hand') {
+        cancelarDragMano();
+    }
+    limpiarFantasmaDragHuerfano();
+    cartaArrastradaId = null;
+    indiceOrigenDrag = null;
+    indiceDestinoPreview = null;
+    reordenYaAplicado = false;
+}
+
 function renderHome() {
     appEl.innerHTML = `
-        <div class="lobby-container">
-            <h1 class="lobby-logo">Golpeado</h1>
-            <p class="lobby-subtitle">Multijugador en tiempo real</p>
+        <div class="home-shell">
+            <button type="button" id="btnLobbySettings" class="lobby-settings-btn" aria-label="Configuración" title="Configuración" aria-expanded="false" aria-controls="lobbySettingsPanel">
+                <svg class="lobby-settings-icon" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+                    <path fill="currentColor" d="M19.14 12.94c.04-.31.06-.63.06-.94s-.02-.63-.06-.94l2.03-1.58a.5.5 0 0 0 .12-.64l-1.92-3.32a.5.5 0 0 0-.6-.22l-2.39.96a7.1 7.1 0 0 0-1.63-.94l-.36-2.54A.5.5 0 0 0 13.9 2h-3.8a.5.5 0 0 0-.49.42l-.36 2.54c-.58.23-1.13.54-1.63.94l-2.39-.96a.5.5 0 0 0-.6.22L2.71 8.48a.5.5 0 0 0 .12.64l2.03 1.58c-.04.31-.06.63-.06.94s.02.63.06.94L2.83 14.58a.5.5 0 0 0-.12.64l1.92 3.32c.14.24.43.34.68.22l2.39-.96c.5.4 1.05.71 1.63.94l.36 2.54c.05.24.25.42.49.42h3.8c.24 0 .44-.18.49-.42l.36-2.54c.58-.23 1.13-.54 1.63-.94l2.39.96c.25.12.54.02.68-.22l1.92-3.32a.5.5 0 0 0-.12-.64l-2.03-1.58zM12 15.5A3.5 3.5 0 1 1 12 8.5a3.5 3.5 0 0 1 0 7z"/>
+                </svg>
+            </button>
 
-            <div class="form-group">
-                <label for="playerName">Tu nombre</label>
-                <input type="text" id="playerName" value="Jugador" placeholder="Ej. Carlos" maxlength="24">
+            <div id="lobbySettingsPanel" class="lobby-settings-panel" hidden>
+                <h3 class="lobby-settings-title">Partidas de prueba</h3>
+                <p class="lobby-settings-desc">Carga una partida ya resuelta para mirar la tabla final.</p>
+                <div class="debug-scenarios">
+                    ${DEBUG_SCENARIOS.map(s => `
+                        <button type="button" class="btn-secondary btn-debug-scenario" data-scenario="${escapeAttr(s.id)}" title="${escapeAttr(s.hint)}">
+                            ${escapeHtml(s.label)}
+                        </button>
+                    `).join('')}
+                </div>
             </div>
 
-            <button id="btnPlayVsBots" class="btn-primary">Jugar contra bots</button>
-            <p class="text-muted room-hint">Partida rápida sola: tú + 1 bot</p>
+            <div class="lobby-container">
+                <h1 class="lobby-logo">Golpeado</h1>
+                <p class="lobby-subtitle">Multijugador en tiempo real</p>
 
-            <div class="lobby-divider"><span>o juega con personas</span></div>
+                <div class="form-group">
+                    <label for="playerName">Tu nombre</label>
+                    <input type="text" id="playerName" value="Jugador" placeholder="Ej. Carlos" maxlength="24">
+                </div>
 
-            <button id="btnCreateRoom" class="btn-secondary btn-add-player">Crear sala</button>
+                <button id="btnPlayVsBots" class="btn-primary">Jugar contra bots</button>
+                <p class="text-muted room-hint">Partida rápida sola: tú + 1 bot</p>
 
-            <div class="form-group" style="margin-top: 1rem;">
-                <label for="roomCode">Código de sala (4 dígitos)</label>
-                <input type="text" id="roomCode" inputmode="numeric" maxlength="4" placeholder="1234" class="room-code-input">
+                <div class="lobby-divider"><span>o juega con personas</span></div>
+
+                <button id="btnCreateRoom" class="btn-secondary btn-add-player">Crear sala</button>
+
+                <div class="form-group" style="margin-top: 1rem;">
+                    <label for="roomCode">Código de sala (4 dígitos)</label>
+                    <input type="text" id="roomCode" inputmode="numeric" maxlength="4" placeholder="1234" class="room-code-input">
+                </div>
+
+                <button id="btnJoinRoom" class="btn-secondary btn-add-player">Unirse a sala</button>
+
+                <p id="homeError" class="lobby-error" hidden></p>
             </div>
-
-            <button id="btnJoinRoom" class="btn-secondary btn-add-player">Unirse a sala</button>
-
-            <p id="homeError" class="lobby-error" hidden></p>
         </div>
     `;
 
@@ -172,7 +490,19 @@ function renderHome() {
         el.textContent = msg || '';
     };
 
+    const settingsBtn = document.getElementById('btnLobbySettings');
+    const settingsPanel = document.getElementById('lobbySettingsPanel');
+    settingsBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        playSound('click');
+        const open = settingsPanel.hidden;
+        settingsPanel.hidden = !open;
+        settingsBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
+        settingsBtn.classList.toggle('is-open', open);
+    });
+
     document.getElementById('btnPlayVsBots').addEventListener('click', () => {
+        playSound('click');
         const nombre = document.getElementById('playerName').value.trim() || 'Jugador';
         showError('');
         socket.emit('playVsBots', { nombre, numBots: 1 }, (res) => {
@@ -180,7 +510,20 @@ function renderHome() {
         });
     });
 
+    document.querySelectorAll('.btn-debug-scenario').forEach(btn => {
+        btn.addEventListener('click', () => {
+            playSound('click');
+            const scenarioId = btn.dataset.scenario;
+            const nombre = document.getElementById('playerName').value.trim() || 'Jugador';
+            showError('');
+            socket.emit('playDebugScenario', { nombre, scenarioId }, (res) => {
+                if (!res?.ok) showError(res?.error || 'No se pudo cargar el escenario');
+            });
+        });
+    });
+
     document.getElementById('btnCreateRoom').addEventListener('click', () => {
+        playSound('click');
         const nombre = document.getElementById('playerName').value.trim() || 'Anfitrión';
         showError('');
         socket.emit('createRoom', { nombre }, (res) => {
@@ -189,6 +532,7 @@ function renderHome() {
     });
 
     document.getElementById('btnJoinRoom').addEventListener('click', () => {
+        playSound('click');
         const nombre = document.getElementById('playerName').value.trim() || 'Jugador';
         const code = document.getElementById('roomCode').value.trim();
         if (!/^\d{4}$/.test(code)) {
@@ -318,14 +662,18 @@ function renderBoard() {
                             : `<strong>Esperando a ${escapeHtml(jugadorTurno?.nombre || 'otro jugador')}…</strong>`
                         }
                     </div>
+                    <button type="button" id="btnDownloadReportLive" class="btn-report-live" title="Descargar estado actual de la partida">
+                        Descargar estado
+                    </button>
                 </div>
+                <p id="reportStatus" class="report-status-live text-muted" hidden></p>
 
                 ${roomState ? `<div class="room-chip">Sala <strong>${escapeHtml(roomState.code)}</strong></div>` : ''}
 
                 <div class="pile-zone">
                     <div class="pile-container">
                         <span class="pile-label">Mazo de Robo</span>
-                        <div id="deckPile" class="card card-back ${puedeInteractuar && fase === 'ROBO' ? 'interactive-card' : ''}"></div>
+                        <div id="deckPile" class="card card-back ${puedeRobarDeMazo() ? 'interactive-card deck-draggable' : ''}"></div>
                         <span class="text-muted" style="font-size: 0.8rem;">Quedan: ${gameState.mazoRoboCount}</span>
                     </div>
                     <div class="pile-container">
@@ -378,13 +726,21 @@ function renderBoard() {
         </div>
     `;
 
-    // Mazo
+    // Mazo: click y drag-to-draw (solo si se puede robar)
     const deckPileEl = document.getElementById('deckPile');
-    if (puedeInteractuar && fase === 'ROBO') {
+    if (puedeRobarDeMazo()) {
         deckPileEl.addEventListener('click', () => {
+            if (ignorarClickTrasDrag) return;
             cartasSeleccionadasIds = [];
             enviarAccion('ROBAR_MAZO');
         });
+        inicializarDragRoboMazo(deckPileEl);
+    }
+
+    // Mano: drop target para carta robada del mazo
+    const handCardsEl = document.getElementById('handCards');
+    if (handCardsEl) {
+        handCardsEl.classList.toggle('hand-drop-ready', puedeRobarDeMazo());
     }
 
     // Descarte
@@ -442,6 +798,14 @@ function renderBoard() {
         if (confirmacion) enviarAccion('CANTAR_PUNTOS');
     });
 
+    const btnLiveReport = document.getElementById('btnDownloadReportLive');
+    if (btnLiveReport) {
+        btnLiveReport.addEventListener('click', () => {
+            playSound('click');
+            descargarInformePartida();
+        });
+    }
+
     actualizarEstadoBotones(puedeInteractuar);
 }
 
@@ -468,6 +832,7 @@ function renderManoLocal(opts = {}) {
                 const index = cartasSeleccionadasIds.indexOf(cardId);
                 if (index === -1) cartasSeleccionadasIds.push(cardId);
                 else cartasSeleccionadasIds.splice(index, 1);
+                playSound('select');
                 actualizarEstadoBotones(true);
                 renderManoLocal({ puedeSeleccionar: true, puedeReordenar });
             });
@@ -560,6 +925,55 @@ function renderCardHtml(card, interactive = false, selected = false) {
     `;
 }
 
+function renderMiniCardHtml(card) {
+    return `
+        <span class="result-mini-card ${card.color || ''}" title="${escapeAttr((card.label || '') + (card.suitLabel || ''))}">
+            <span class="result-mini-value">${escapeHtml(card.label || '')}</span>
+            <span class="result-mini-suit">${escapeHtml(card.suitLabel || '')}</span>
+        </span>
+    `;
+}
+
+function renderGruposArmadosHtml(gruposArmados = []) {
+    if (!gruposArmados.length) {
+        return `<span class="result-empty">Sin grupos</span>`;
+    }
+    return `
+        <div class="result-groups">
+            ${gruposArmados.map((g) => {
+                const tag = g.etiqueta
+                    || (g.origen === 'mesa' ? 'Mesa'
+                        : g.origen === 'color' ? 'Color'
+                        : g.origen === 'poker' ? 'Póker'
+                        : g.origen === 'enchufe' ? 'Enchufe'
+                        : 'Mano');
+                const title = g.origen === 'color'
+                    ? 'Victoria por Color (≥7 mismo palo)'
+                    : g.origen === 'poker'
+                        ? 'Victoria por Póker (4 iguales)'
+                        : g.origen === 'mesa'
+                            ? 'Expuesto en mesa'
+                            : g.origen === 'enchufe'
+                                ? (g.sobreGrupo
+                                    ? `Enchufe sobre ${g.sobreGrupo}`
+                                    : 'Carta enchufada a un grupo de mesa')
+                                : 'Armado en mano';
+                const sub = (g.origen === 'enchufe' && g.sobreGrupo)
+                    ? `<span class="result-group-sub">sobre ${escapeHtml(g.sobreGrupo)}</span>`
+                    : '';
+                return `
+                <div class="result-group result-group-${escapeAttr(g.origen || 'mano')}" title="${escapeAttr(title)}">
+                    <span class="result-group-tag">${escapeHtml(tag)}</span>
+                    ${sub}
+                    <div class="result-group-cards">
+                        ${(g.cartas || []).map(c => renderMiniCardHtml(c)).join('')}
+                    </div>
+                </div>`;
+            }).join('')}
+        </div>
+    `;
+}
+
 function renderVictoryScreen() {
     if (!gameState?.juegoTerminado) return renderBoard();
 
@@ -567,6 +981,8 @@ function renderVictoryScreen() {
     let sub = '¡Final del juego por conteo de puntos!';
     if (gameState.tipoVictoria === 'CERO_MANO') sub = '¡Victoria inmediata con Cero en Mano!';
     if (gameState.tipoVictoria === 'CERO_EXPUESTO') sub = '¡Victoria tras una ronda de espera con Cero en Mesa!';
+    if (gameState.tipoVictoria === 'POKER') sub = '¡Victoria inmediata con Póker (4 cartas iguales)!';
+    if (gameState.tipoVictoria === 'COLOR') sub = '¡Victoria inmediata con Color (7 del mismo palo)!';
 
     const resultados = gameState.resultadosVictoria || [];
 
@@ -576,7 +992,7 @@ function renderVictoryScreen() {
         const cantorGano = gameState.ganadorId === gameState.turnoActual;
         if (cantor && !cantorGano && ganador) {
             avisoApuestasHtml = `
-                <div style="background: rgba(239, 68, 68, 0.15); border: 1px solid var(--color-danger); border-radius: 12px; padding: 1rem; margin-top: 1.5rem; text-align: center; color: var(--color-danger); font-weight: 600;">
+                <div class="victory-warning">
                     El cantor (${escapeHtml(cantor.nombre)}) perdió. Debe pagar el TRIPLE a ${escapeHtml(ganador.nombre)}.
                 </div>
             `;
@@ -584,67 +1000,344 @@ function renderVictoryScreen() {
     }
 
     appEl.innerHTML = `
-        <div class="overlay-screen">
+        <div class="overlay-screen victory-overlay">
             <div class="victory-box">
                 <h1 class="victory-title">¡Partida Finalizada!</h1>
                 <p class="victory-subtitle">${sub}</p>
-                <h2 style="font-size: 1.5rem; margin-bottom: 1.5rem; color: var(--text-primary);">
-                    Ganador: <span style="color: var(--color-accent-hover); font-weight: 700;">${escapeHtml(ganador?.nombre || '')}</span>
+                <h2 class="victory-winner">
+                    Ganador: <span>${escapeHtml(ganador?.nombre || '')}</span>
                 </h2>
-                <table class="results-table">
-                    <thead>
-                        <tr>
-                            <th>Jugador</th>
-                            <th>Grupos</th>
-                            <th>Cartas Sueltas</th>
-                            <th>Puntos Restantes</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        ${resultados.map(res => `
-                            <tr class="${res.esGanador ? 'winner-row' : ''}">
-                                <td><strong>${escapeHtml(res.nombre)}</strong> ${res.esGanador ? '👑' : ''}</td>
-                                <td>${res.grupos}</td>
-                                <td><span style="font-size: 0.9rem; color: var(--text-secondary);">${escapeHtml(res.cartasSueltasText)}</span></td>
-                                <td><strong>${res.puntosSueltas} pts</strong></td>
+                <div class="results-scroll">
+                    <table class="results-table results-table-detailed">
+                        <thead>
+                            <tr>
+                                <th>Jugador</th>
+                                <th>Grupos armados</th>
+                                <th>Cartas sueltas</th>
+                                <th>Puntos</th>
                             </tr>
-                        `).join('')}
-                    </tbody>
-                </table>
-                ${roomState?.yoSoyHost
-                    ? `<button id="btnRestart" class="btn-primary" style="max-width: 250px; margin: 0 auto;">Volver al lobby</button>`
-                    : `<p class="text-muted" style="margin-top: 1rem; text-align: center;">Esperando al anfitrión…</p>`
-                }
+                        </thead>
+                        <tbody>
+                            ${resultados.map(res => `
+                                <tr class="${res.esGanador ? 'winner-row' : 'loser-row'}">
+                                    <td class="result-player">
+                                        <strong>${escapeHtml(res.nombre)}</strong>
+                                        ${res.esGanador ? '<span class="result-badge win">Ganó</span>' : '<span class="result-badge lose">Perdió</span>'}
+                                    </td>
+                                    <td>${renderGruposArmadosHtml(res.gruposArmados)}</td>
+                                    <td>
+                                        <span class="result-sueltas">${escapeHtml(res.cartasSueltasText)}</span>
+                                    </td>
+                                    <td class="result-points"><strong>${res.puntosSueltas}</strong></td>
+                                </tr>
+                            `).join('')}
+                        </tbody>
+                    </table>
+                </div>
+                <div class="victory-actions">
+                    <button id="btnDownloadReport" class="btn-secondary victory-report" type="button">
+                        Descargar informe de partida
+                    </button>
+                    ${roomState?.yoSoyHost
+                        ? `<button id="btnRestart" class="btn-primary victory-restart" type="button">Volver al lobby</button>`
+                        : `<p class="text-muted victory-wait">Esperando al anfitrión…</p>`
+                    }
+                </div>
+                <p id="reportStatus" class="victory-report-status text-muted" hidden></p>
                 ${avisoApuestasHtml}
             </div>
         </div>
     `;
 
+    const btnReport = document.getElementById('btnDownloadReport');
+    if (btnReport) {
+        btnReport.addEventListener('click', () => {
+            playSound('click');
+            descargarInformePartida();
+        });
+    }
+
     const btn = document.getElementById('btnRestart');
     if (btn) {
         btn.addEventListener('click', () => {
+            playSound('click');
             socket.emit('returnToLobby', () => {});
         });
     }
+}
+
+/**
+ * Construye y descarga un JSON del estado (en curso o terminada) para análisis.
+ * Prefiere el snapshot del servidor (manos completas); si falla, usa el estado local.
+ */
+function enriquecerInformeMeta(informe) {
+    informe.metaCliente = {
+        exportadoEn: new Date().toISOString(),
+        sala: roomState ? {
+            code: roomState.code,
+            status: roomState.status,
+            yoSoyHost: !!roomState.yoSoyHost,
+            jugadoresLobby: (roomState.players || []).map(p => ({
+                nombre: p.nombre,
+                esBot: !!p.esBot,
+                esHost: !!p.esHost
+            }))
+        } : null,
+        viewer: {
+            miIndice: gameState?.miIndice ?? null,
+            miNombre: gameState?.jugadores?.find(j => j.esYo)?.nombre ?? null
+        },
+        uiTablaFinal: gameState?.resultadosVictoria ?? null
+    };
+    return informe;
+}
+
+function construirInformeClienteLocal() {
+    return enriquecerInformeMeta({
+        version: 1,
+        app: 'golpeado-game',
+        generadoEn: new Date().toISOString(),
+        nota: 'Informe reconstruido en cliente (fallback)',
+        enCurso: !gameState?.juegoTerminado,
+        resumen: {
+            juegoTerminado: !!gameState?.juegoTerminado,
+            tipoVictoria: gameState?.tipoVictoria ?? null,
+            ganadorId: gameState?.ganadorId ?? null,
+            ganadorNombre: gameState?.jugadores?.find(j => j.id === gameState.ganadorId)?.nombre ?? null,
+            turnoActual: gameState?.turnoActual ?? null,
+            faseActual: gameState?.faseActual ?? null,
+            mazoRoboRestante: gameState?.mazoRoboCount ?? null,
+            descarteCount: gameState?.descarteCount ?? null,
+            descarteTop: gameState?.descarteTop
+                ? `${gameState.descarteTop.label}${gameState.descarteTop.suitLabel}`
+                : null
+        },
+        jugadores: (gameState?.jugadores || []).map(j => ({
+            id: j.id,
+            nombre: j.nombre,
+            esGanador: j.id === gameState.ganadorId,
+            esYo: !!j.esYo,
+            cartasCount: j.cartasCount,
+            mano: j.mano,
+            manoTexto: (j.mano || []).map(c => `${c.label}${c.suitLabel}`),
+            gruposExpuestos: j.gruposExpuestos
+        })),
+        resultadosVictoria: gameState?.resultadosVictoria ?? null,
+        historial: gameState?.historial ?? []
+    });
+}
+
+function guardarInformeJson(informe) {
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    const tipo = informe.enCurso
+        ? 'en-curso'
+        : (informe.resumen?.tipoVictoria || 'partida').toLowerCase();
+    const filename = `golpeado-informe-${tipo}-${stamp}.json`;
+    const blob = new Blob([JSON.stringify(informe, null, 2)], { type: 'application/json;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    return filename;
+}
+
+function descargarInformePartida() {
+    const status = document.getElementById('reportStatus');
+    const setStatus = (msg) => {
+        if (!status) return;
+        status.hidden = !msg;
+        status.textContent = msg || '';
+    };
+
+    if (!gameState) {
+        setStatus('No hay partida para exportar.');
+        return;
+    }
+
+    socket.emit('exportGameReport', (res) => {
+        try {
+            const informe = (res?.ok && res.informe)
+                ? enriquecerInformeMeta(res.informe)
+                : construirInformeClienteLocal();
+            if (!res?.ok) {
+                informe.nota = (informe.nota ? `${informe.nota} · ` : '') + (res?.error || 'Servidor no entregó snapshot');
+            }
+            const filename = guardarInformeJson(informe);
+            const tip = informe.enCurso ? 'estado en curso' : 'partida finalizada';
+            setStatus(`Descargado (${tip}): ${filename}`);
+        } catch (err) {
+            console.error(err);
+            setStatus(err?.message || 'No se pudo descargar el informe.');
+        }
+    });
 }
 
 // ==========================================
 // DRAG AND DROP (Pointer Events: desktop + móvil)
 // ==========================================
 
-let pointerDrag = null; // { pointerId, card, id, startX, startY, dragging, ghost }
+let pointerDrag = null; // { type:'hand'|'deck', pointerId, card, id, startX, startY, dragging, ghost }
+let deckDropSobreMano = false;
 
 function inicializarDragAndDrop() {
     const handCardsEl = document.getElementById('handCards');
     if (!handCardsEl || gameState?.juegoTerminado) return;
 
     handCardsEl.querySelectorAll('.card').forEach(card => {
-        // HTML5 DnD falla en iOS/Safari; usamos Pointer Events en todos lados
         card.setAttribute('draggable', 'false');
         card.style.touchAction = 'none';
-
         card.addEventListener('pointerdown', onCardPointerDown);
     });
+}
+
+function inicializarDragRoboMazo(deckPileEl) {
+    if (!deckPileEl || !puedeRobarDeMazo()) return;
+    deckPileEl.style.touchAction = 'none';
+    deckPileEl.addEventListener('pointerdown', onDeckPointerDown);
+}
+
+function onDeckPointerDown(e) {
+    if (!puedeRobarDeMazo()) return;
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+    if (pointerDrag) return;
+
+    const card = e.currentTarget;
+    pointerDrag = {
+        type: 'deck',
+        pointerId: e.pointerId,
+        card,
+        id: 'deck',
+        startX: e.clientX,
+        startY: e.clientY,
+        dragging: false,
+        ghost: null
+    };
+    deckDropSobreMano = false;
+
+    try { card.setPointerCapture(e.pointerId); } catch (_) {}
+    card.addEventListener('pointermove', onDeckPointerMove);
+    card.addEventListener('pointerup', onDeckPointerUp);
+    card.addEventListener('pointercancel', onDeckPointerUp);
+}
+
+function onDeckPointerMove(e) {
+    if (!pointerDrag || pointerDrag.type !== 'deck' || e.pointerId !== pointerDrag.pointerId) return;
+
+    const dist = Math.hypot(e.clientX - pointerDrag.startX, e.clientY - pointerDrag.startY);
+    if (!pointerDrag.dragging && dist > 12) {
+        if (!puedeRobarDeMazo()) {
+            cancelarDragDeck();
+            return;
+        }
+        iniciarArrastreDeck(e);
+    }
+    if (!pointerDrag?.dragging) return;
+
+    e.preventDefault();
+    if (pointerDrag.ghost) {
+        pointerDrag.ghost.style.left = `${e.clientX}px`;
+        pointerDrag.ghost.style.top = `${e.clientY}px`;
+    }
+
+    const hand = document.getElementById('handCards');
+    const overHand = hand && (() => {
+        const r = hand.getBoundingClientRect();
+        return e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom;
+    })();
+    deckDropSobreMano = !!overHand;
+    hand?.classList.toggle('hand-drop-hover', deckDropSobreMano);
+}
+
+function iniciarArrastreDeck(e) {
+    if (!pointerDrag || pointerDrag.dragging) return;
+    pointerDrag.dragging = true;
+    pointerDrag.card.classList.add('is-dragging');
+
+    const ghost = pointerDrag.card.cloneNode(true);
+    ghost.classList.add('card-drag-ghost', 'card-back');
+    ghost.classList.remove('is-dragging', 'interactive-card');
+    const rect = pointerDrag.card.getBoundingClientRect();
+    ghost.style.width = `${rect.width}px`;
+    ghost.style.height = `${rect.height}px`;
+    ghost.style.left = `${e.clientX}px`;
+    ghost.style.top = `${e.clientY}px`;
+    document.body.appendChild(ghost);
+    pointerDrag.ghost = ghost;
+    document.body.classList.add('is-drawing-from-deck');
+}
+
+function onDeckPointerUp(e) {
+    if (!pointerDrag || pointerDrag.type !== 'deck' || e.pointerId !== pointerDrag.pointerId) return;
+
+    const card = pointerDrag.card;
+    const wasDragging = pointerDrag.dragging;
+    const dropOk = deckDropSobreMano && puedeRobarDeMazo();
+
+    card.removeEventListener('pointermove', onDeckPointerMove);
+    card.removeEventListener('pointerup', onDeckPointerUp);
+    card.removeEventListener('pointercancel', onDeckPointerUp);
+    try { card.releasePointerCapture(e.pointerId); } catch (_) {}
+
+    if (pointerDrag.ghost) {
+        pointerDrag.ghost.remove();
+        pointerDrag.ghost = null;
+    }
+    card.classList.remove('is-dragging');
+    document.body.classList.remove('is-drawing-from-deck');
+    document.getElementById('handCards')?.classList.remove('hand-drop-hover');
+
+    pointerDrag = null;
+    deckDropSobreMano = false;
+
+    if (wasDragging) {
+        ignorarClickTrasDrag = true;
+        window.setTimeout(() => { ignorarClickTrasDrag = false; }, 80);
+        if (dropOk) {
+            cartasSeleccionadasIds = [];
+            enviarAccion('ROBAR_MAZO');
+        }
+    }
+
+    flushRenderDiferido();
+}
+
+function cancelarDragDeck() {
+    if (!pointerDrag || pointerDrag.type !== 'deck') return;
+    const card = pointerDrag.card;
+    card.removeEventListener('pointermove', onDeckPointerMove);
+    card.removeEventListener('pointerup', onDeckPointerUp);
+    card.removeEventListener('pointercancel', onDeckPointerUp);
+    try {
+        if (pointerDrag.pointerId != null) card.releasePointerCapture(pointerDrag.pointerId);
+    } catch (_) {}
+    if (pointerDrag.ghost) pointerDrag.ghost.remove();
+    card.classList.remove('is-dragging');
+    document.body.classList.remove('is-drawing-from-deck');
+    document.getElementById('handCards')?.classList.remove('hand-drop-hover');
+    pointerDrag = null;
+    deckDropSobreMano = false;
+}
+
+function cancelarDragMano() {
+    if (!pointerDrag || pointerDrag.type !== 'hand') return;
+    const card = pointerDrag.card;
+    card.removeEventListener('pointermove', onCardPointerMove);
+    card.removeEventListener('pointerup', onCardPointerUp);
+    card.removeEventListener('pointercancel', onCardPointerUp);
+    try {
+        if (pointerDrag.pointerId != null) card.releasePointerCapture(pointerDrag.pointerId);
+    } catch (_) {}
+    if (pointerDrag.ghost) pointerDrag.ghost.remove();
+    document.body.classList.remove('is-reordering-cards');
+    limpiarPreviewReorden();
+    pointerDrag = null;
+    cartaArrastradaId = null;
+    indiceOrigenDrag = null;
+    indiceDestinoPreview = null;
 }
 
 function onCardPointerDown(e) {
@@ -654,6 +1347,7 @@ function onCardPointerDown(e) {
 
     const card = e.currentTarget;
     pointerDrag = {
+        type: 'hand',
         pointerId: e.pointerId,
         card,
         id: card.dataset.id,
@@ -671,7 +1365,7 @@ function onCardPointerDown(e) {
 }
 
 function onCardPointerMove(e) {
-    if (!pointerDrag || e.pointerId !== pointerDrag.pointerId) return;
+    if (!pointerDrag || pointerDrag.type !== 'hand' || e.pointerId !== pointerDrag.pointerId) return;
 
     const dx = e.clientX - pointerDrag.startX;
     const dy = e.clientY - pointerDrag.startY;
@@ -689,40 +1383,80 @@ function onCardPointerMove(e) {
         pointerDrag.ghost.style.top = `${e.clientY}px`;
     }
 
-    // Buscar carta destino bajo el dedo/cursor (la arrastrada ignora hits)
-    const prevPE = pointerDrag.card.style.pointerEvents;
-    pointerDrag.card.style.pointerEvents = 'none';
-    if (pointerDrag.ghost) pointerDrag.ghost.style.pointerEvents = 'none';
-    // Preferir índice vertical+horizontal en móvil (cartas en wrap)
-    const under = document.elementFromPoint(e.clientX, e.clientY);
-    pointerDrag.card.style.pointerEvents = prevPE;
+    const destIdx = indiceDestinoDesdePunto(e.clientX, e.clientY);
+    if (destIdx == null) return;
 
-    let target = under?.closest?.('#handCards .card');
-    if (!target) {
-        target = cartaMasCercana(e.clientX, e.clientY);
+    if (destIdx === indiceOrigenDrag) {
+        // Volvió a su sitio: cancelar preview de vecinos
+        if (indiceDestinoPreview !== indiceOrigenDrag) {
+            indiceDestinoPreview = indiceOrigenDrag;
+            limpiarSoloPreviewShift();
+        }
+        return;
     }
+
+    const handCardsEl = document.getElementById('handCards');
+    const cards = [...handCardsEl.querySelectorAll('.card')];
+    const target = cards[destIdx];
     if (target && target.dataset.id !== cartaArrastradaId) {
         actualizarPreviewReorden(target.dataset.id);
     }
 }
 
-function cartaMasCercana(clientX, clientY) {
+/**
+ * Índice destino: si el puntero está sobre el hueco original, se queda en origen.
+ * Así soltar "en el mismo sitio" no salta al vecino.
+ */
+function indiceDestinoDesdePunto(clientX, clientY) {
     const handCardsEl = document.getElementById('handCards');
-    if (!handCardsEl || !cartaArrastradaId) return null;
-    let best = null;
+    if (!handCardsEl || !cartaArrastradaId || indiceOrigenDrag == null) return null;
+
+    const cards = [...handCardsEl.querySelectorAll('.card')];
+    const fromIdx = cards.findIndex(c => c.dataset.id === cartaArrastradaId);
+    if (fromIdx === -1) return null;
+
+    const dragged = cards[fromIdx];
+    const originRect = dragged.getBoundingClientRect();
+    const pad = 12;
+    if (
+        clientX >= originRect.left - pad &&
+        clientX <= originRect.right + pad &&
+        clientY >= originRect.top - pad &&
+        clientY <= originRect.bottom + pad
+    ) {
+        return fromIdx;
+    }
+
+    const prevPE = dragged.style.pointerEvents;
+    dragged.style.pointerEvents = 'none';
+    if (pointerDrag?.ghost) pointerDrag.ghost.style.pointerEvents = 'none';
+    const under = document.elementFromPoint(clientX, clientY);
+    dragged.style.pointerEvents = prevPE;
+
+    const target = under?.closest?.('#handCards .card');
+    if (target && target.dataset.id !== cartaArrastradaId) {
+        return cards.findIndex(c => c.dataset.id === target.dataset.id);
+    }
+
+    // Más cercano por centro, pero si el origen sigue siendo el más cercano → no mover
+    let bestIdx = fromIdx;
     let bestDist = Infinity;
-    handCardsEl.querySelectorAll('.card').forEach(c => {
+    const ox = originRect.left + originRect.width / 2;
+    const oy = originRect.top + originRect.height / 2;
+    const distOrigin = Math.hypot(clientX - ox, clientY - oy);
+
+    cards.forEach((c, i) => {
         if (c.dataset.id === cartaArrastradaId) return;
         const r = c.getBoundingClientRect();
-        const cx = r.left + r.width / 2;
-        const cy = r.top + r.height / 2;
-        const d = Math.hypot(clientX - cx, clientY - cy);
+        const d = Math.hypot(clientX - (r.left + r.width / 2), clientY - (r.top + r.height / 2));
         if (d < bestDist) {
             bestDist = d;
-            best = c;
+            bestIdx = i;
         }
     });
-    return best;
+
+    if (distOrigin <= bestDist + 4) return fromIdx;
+    return bestIdx;
 }
 
 function iniciarArrastrePointer(e) {
@@ -741,7 +1475,6 @@ function iniciarArrastrePointer(e) {
     pointerDrag.dragging = true;
     pointerDrag.card.classList.add('is-dragging');
 
-    // Fantasma que sigue el dedo (mejor UX en móvil)
     const ghost = pointerDrag.card.cloneNode(true);
     ghost.classList.remove('is-dragging', 'selected', 'card-shifting');
     ghost.classList.add('card-drag-ghost');
@@ -758,7 +1491,7 @@ function iniciarArrastrePointer(e) {
 }
 
 function onCardPointerUp(e) {
-    if (!pointerDrag || e.pointerId !== pointerDrag.pointerId) return;
+    if (!pointerDrag || pointerDrag.type !== 'hand' || e.pointerId !== pointerDrag.pointerId) return;
 
     const card = pointerDrag.card;
     const wasDragging = pointerDrag.dragging;
@@ -775,8 +1508,17 @@ function onCardPointerUp(e) {
     document.body.classList.remove('is-reordering-cards');
 
     if (wasDragging) {
-        if (!reordenYaAplicado) confirmarReordenMano();
+        // Recalcular destino en el punto final (evita quedar con el vecino si volviste al sitio)
+        const finalIdx = indiceDestinoDesdePunto(e.clientX, e.clientY);
+        if (finalIdx != null) indiceDestinoPreview = finalIdx;
+
+        if (indiceDestinoPreview === indiceOrigenDrag) {
+            limpiarPreviewReorden();
+        } else if (!reordenYaAplicado) {
+            confirmarReordenMano();
+        }
         if (!reordenYaAplicado) limpiarPreviewReorden();
+
         ignorarClickTrasDrag = true;
         window.setTimeout(() => { ignorarClickTrasDrag = false; }, 80);
         cartaArrastradaId = null;
@@ -785,6 +1527,7 @@ function onCardPointerUp(e) {
     }
 
     pointerDrag = null;
+    flushRenderDiferido();
 }
 
 function actualizarPreviewReorden(targetId) {
@@ -798,7 +1541,10 @@ function actualizarPreviewReorden(targetId) {
     if (indiceDestinoPreview === toIdx) return;
 
     indiceDestinoPreview = toIdx;
-    if (fromIdx === toIdx) return;
+    if (fromIdx === toIdx) {
+        limpiarSoloPreviewShift();
+        return;
+    }
 
     const tops = cards.map(c => c.getBoundingClientRect().top);
     const multilinea = tops.some(t => Math.abs(t - tops[0]) > 8);
@@ -830,6 +1576,16 @@ function actualizarPreviewReorden(targetId) {
         if (fromIdx < toIdx && i > fromIdx && i <= toIdx) shift = -step;
         else if (fromIdx > toIdx && i >= toIdx && i < fromIdx) shift = step;
         c.style.transform = shift ? `translateX(${shift}px)` : '';
+    });
+}
+
+function limpiarSoloPreviewShift() {
+    const handCardsEl = document.getElementById('handCards');
+    if (!handCardsEl) return;
+    handCardsEl.querySelectorAll('.card').forEach(c => {
+        if (c.dataset.id === cartaArrastradaId) return;
+        c.classList.remove('card-shifting', 'drag-over');
+        c.style.transform = '';
     });
 }
 
@@ -879,6 +1635,7 @@ function confirmarReordenMano() {
         const yo = gameState.jugadores.find(j => j.esYo);
         if (yo) yo.mano = mano;
 
+        playSound('reorder');
         renderManoLocal({
             puedeSeleccionar: !!gameState.esMiTurno,
             puedeReordenar: !gameState.juegoTerminado
@@ -924,6 +1681,7 @@ function animarFlipMano(aplicarCambio) {
         });
         animandoFlip = false;
         reordenYaAplicado = false;
+        flushRenderDiferido();
     }, FLIP_DURATION_MS + 40);
 }
 

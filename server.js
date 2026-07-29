@@ -10,6 +10,7 @@ import { fileURLToPath } from 'url';
 import { Server } from 'socket.io';
 import { GolpeadoGame } from './game.js';
 import { jugarTurnoBot } from './bot.js';
+import { aplicarEscenarioDebug, listarIdsEscenarios } from './debug-scenarios.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -289,6 +290,76 @@ io.on('connection', (socket) => {
         console.log(`[Sala ${code}] vs bots (${n}) para ${nombreLimpio}`);
     });
 
+    socket.on('playDebugScenario', ({ nombre, scenarioId } = {}, ack) => {
+        const responder = (data) => {
+            if (typeof ack === 'function') ack(data);
+        };
+
+        const id = String(scenarioId || '').trim();
+        if (!listarIdsEscenarios().includes(id)) {
+            responder({ ok: false, error: 'Escenario de prueba inválido.' });
+            return;
+        }
+
+        // Salir de sala previa si había una
+        if (socket.data.roomCode) {
+            salirDeSala(socket);
+        }
+
+        const nombreLimpio = String(nombre || '').trim() || 'Jugador';
+        const code = generarCodigoSala();
+        const room = {
+            code,
+            hostId: socket.id,
+            status: 'lobby',
+            players: [{
+                socketId: socket.id,
+                nombre: nombreLimpio,
+                conectado: true,
+                esBot: false,
+                playerIndex: null
+            }],
+            game: null,
+            _botTimer: null,
+            esDebug: true
+        };
+        crearBot(room);
+        rooms.set(code, room);
+        socket.data.roomCode = code;
+        socket.join(code);
+
+        const listos = jugadoresListos(room);
+        room.players = listos;
+        room.players.forEach((p, idx) => {
+            p.playerIndex = idx;
+        });
+
+        room.game = new GolpeadoGame();
+        room.game.inicializarJuego(room.players.map(p => p.nombre));
+
+        // Anular victoria accidental por mano aleatoria al repartir
+        room.game.juegoTerminado = false;
+        room.game.ganadorId = null;
+        room.game.tipoVictoria = null;
+
+        const aplicado = aplicarEscenarioDebug(room.game, id);
+        if (!aplicado.ok) {
+            rooms.delete(code);
+            socket.leave(code);
+            socket.data.roomCode = null;
+            responder({ ok: false, error: aplicado.error || 'No se pudo aplicar el escenario.' });
+            return;
+        }
+
+        room.status = room.game.juegoTerminado ? 'finished' : 'playing';
+        emitirLobby(room);
+        emitirGameState(room);
+        if (room.status === 'playing') programarTurnosBot(room);
+
+        responder({ ok: true, room: serializarLobby(room, socket.id), scenarioId: id });
+        console.log(`[Sala ${code}] debug «${id}» para ${nombreLimpio}`);
+    });
+
     socket.on('leaveRoom', () => {
         salirDeSala(socket);
     });
@@ -318,6 +389,42 @@ io.on('connection', (socket) => {
 
         iniciarPartidaEnSala(room);
         responder({ ok: true });
+    });
+
+    socket.on('exportGameReport', (ack) => {
+        const room = obtenerSalaDeSocket(socket);
+        const responder = (data) => {
+            if (typeof ack === 'function') ack(data);
+        };
+
+        if (!room?.game) {
+            responder({ ok: false, error: 'No hay partida para exportar.' });
+            return;
+        }
+        if (room.status !== 'playing' && room.status !== 'finished') {
+            responder({ ok: false, error: 'No hay partida activa.' });
+            return;
+        }
+
+        const jugador = encontrarJugador(room, socket.id);
+        if (!jugador || jugador.playerIndex == null) {
+            responder({ ok: false, error: 'No eres un jugador de esta partida.' });
+            return;
+        }
+
+        const informe = room.game.generarInformePartida(jugador.playerIndex);
+        informe.metaSala = {
+            code: room.code,
+            status: room.status,
+            esDebug: !!room.esDebug,
+            jugadores: room.players.map(p => ({
+                nombre: p.nombre,
+                esBot: !!p.esBot,
+                playerIndex: p.playerIndex
+            }))
+        };
+
+        responder({ ok: true, informe });
     });
 
     socket.on('gameAction', (payload = {}, ack) => {

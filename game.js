@@ -27,6 +27,66 @@ export const VALUES = {
     13: { value: 13, label: 'K', points: 10 }
 };
 
+/** Crea una carta de baraja (útil para tests y utilidades). */
+export function crearCarta(suit, value) {
+    const val = VALUES[value];
+    if (!SUITS[suit] || !val) {
+        throw new Error(`Carta inválida: ${suit}${value}`);
+    }
+    return {
+        id: `${suit}${val.value}`,
+        suit,
+        value: val.value,
+        label: val.label,
+        suitLabel: SUITS[suit].label,
+        color: SUITS[suit].color
+    };
+}
+
+function serializarCartaResumen(c) {
+    return {
+        id: c.id,
+        label: c.label,
+        suitLabel: c.suitLabel,
+        color: c.color,
+        suit: c.suit,
+        value: c.value
+    };
+}
+
+/**
+ * Cartas de la jugada especial Color (≥7 del mismo palo).
+ */
+export function cartasDeColor(mano) {
+    const porPalo = {};
+    for (const c of mano) {
+        if (!porPalo[c.suit]) porPalo[c.suit] = [];
+        porPalo[c.suit].push(c);
+    }
+    let mejor = null;
+    for (const cartas of Object.values(porPalo)) {
+        if (cartas.length >= 7 && (!mejor || cartas.length > mejor.length)) {
+            mejor = cartas;
+        }
+    }
+    return mejor || [];
+}
+
+/**
+ * Cartas de la jugada especial Póker (4 del mismo valor).
+ */
+export function cartasDePoker(mano) {
+    const porValor = {};
+    for (const c of mano) {
+        if (!porValor[c.value]) porValor[c.value] = [];
+        porValor[c.value].push(c);
+    }
+    for (const cartas of Object.values(porValor)) {
+        if (cartas.length >= 4) return cartas.slice(0, 4);
+    }
+    return [];
+}
+
 // ==========================================
 // 1. VALIDACIÓN DE COMBINACIONES (GRUPOS)
 // ==========================================
@@ -264,7 +324,8 @@ export class GolpeadoGame {
         
         this.juegoTerminado = false;
         this.ganadorId = null;
-        this.tipoVictoria = null; // 'CERO_MANO', 'CERO_EXPUESTO', 'PUNTOS'
+        this.tipoVictoria = null; // 'CERO_MANO', 'CERO_EXPUESTO', 'PUNTOS', 'POKER', 'COLOR'
+        this.mazoRecicladoUnaVez = false; // Victoria póker/color solo antes del 1er reciclaje
         
         // Historial de eventos del juego para la UI
         this.historial = [];
@@ -286,6 +347,7 @@ export class GolpeadoGame {
         this.turnosEsperaRestantes = 0;
         this.mazoDescarte = [];
         this.historial = [];
+        this.mazoRecicladoUnaVez = false;
 
         // 1. Crear baraja
         const baraja = [];
@@ -331,6 +393,9 @@ export class GolpeadoGame {
         // El primer jugador inicia con 8 cartas directamente en fase de DESCARTE (omite robo)
         this.faseActual = 'DESCARTE';
         this.log(`Partida iniciada. ${this.jugadores[0].nombre} inicia con 8 cartas (fase Descarte).`);
+
+        // Primer turno: también puede ganar por póker o color sin haber robado
+        this.verificarVictoriaEspecial(this.jugadores[0]);
     }
 
     /**
@@ -385,7 +450,8 @@ export class GolpeadoGame {
                 [this.mazoRobo[i], this.mazoRobo[j]] = [this.mazoRobo[j], this.mazoRobo[i]];
             }
             this.mazoDescarte = [ultimaCarta];
-            this.log("Mazo agotado. Se recicló y barajó la pila de descartes.");
+            this.mazoRecicladoUnaVez = true;
+            this.log("Mazo agotado. Se recicló y barajó la pila de descartes. (Ya no aplica victoria por póker/color).");
         }
 
         const carta = this.mazoRobo.pop();
@@ -394,6 +460,10 @@ export class GolpeadoGame {
         this.faseActual = 'DESCARTE';
 
         this.log(`${jugador.nombre} robó una carta del mazo.`);
+
+        // Victoria especial (póker / color) antes que Cero en Mano
+        this.verificarVictoriaEspecial(jugador);
+        if (this.juegoTerminado) return true;
 
         // Comprobación interna de victoria inmediata para Cero en Mano (Modo A)
         this.verificarVictoriaInmediata(jugador);
@@ -476,6 +546,10 @@ export class GolpeadoGame {
         this.mazoDescarte.push(cartaDescartada);
         this.log(`${jugador.nombre} descartó ${cartaDescartada.label}${cartaDescartada.suitLabel}.`);
 
+        // Tras descartar puede quedar color (7 del mismo palo) o seguir con póker
+        this.verificarVictoriaEspecial(jugador);
+        if (this.juegoTerminado) return true;
+
         // Comprobar si tras el descarte el jugador califica para victoria en espera (Modo B)
         // El jugador entra en espera si sus 7 cartas restantes (mano + expuestas) se optimizan a 0 puntos de Deadwood
         const optimizacion = optimizarMano(jugador.mano, this.gruposEnMesa);
@@ -494,9 +568,62 @@ export class GolpeadoGame {
     }
 
     /**
+     * Elegible para victoria por póker/color:
+     * - No ha robado del descarte ni bajado grupos
+     * - El mazo de robo aún no se ha reciclado por primera vez
+     */
+    elegibleVictoriaEspecial(jugador) {
+        if (this.juegoTerminado || this.mazoRecicladoUnaVez) return false;
+        if (!jugador) return false;
+        if (jugador.tuvoRoboDescarte) return false;
+        if (jugador.gruposExpuestos.length > 0) return false;
+        return true;
+    }
+
+    /**
+     * Póker: 4 cartas del mismo valor en mano.
+     */
+    tienePokerEnMano(mano) {
+        const porValor = {};
+        for (const c of mano) {
+            porValor[c.value] = (porValor[c.value] || 0) + 1;
+            if (porValor[c.value] >= 4) return true;
+        }
+        return false;
+    }
+
+    /**
+     * Color: al menos 7 cartas del mismo palo en mano.
+     */
+    tieneColorEnMano(mano) {
+        const porPalo = {};
+        for (const c of mano) {
+            porPalo[c.suit] = (porPalo[c.suit] || 0) + 1;
+            if (porPalo[c.suit] >= 7) return true;
+        }
+        return false;
+    }
+
+    /**
+     * Victoria inmediata por póker o color (equivalente a cero puntos).
+     */
+    verificarVictoriaEspecial(jugador) {
+        if (!this.elegibleVictoriaEspecial(jugador)) return;
+
+        if (this.tienePokerEnMano(jugador.mano)) {
+            this.declararVictoria(jugador.id, 'POKER');
+            return;
+        }
+        if (this.tieneColorEnMano(jugador.mano)) {
+            this.declararVictoria(jugador.id, 'COLOR');
+        }
+    }
+
+    /**
      * Comprueba si el jugador tiene Cero en Mano (victoria inmediata).
      */
     verificarVictoriaInmediata(jugador) {
+        if (this.juegoTerminado) return;
         if (jugador.tuvoRoboDescarte) return; // Debe cumplir que nunca robó de descartes
 
         // Tiene 8 cartas en mano (por haber robado). Vemos si puede optimizar 7 cartas a 0 puntos
@@ -547,6 +674,10 @@ export class GolpeadoGame {
             msg = `¡${jugador.nombre} gana la partida con CERO EN MANO (Victoria Inmediata)!`;
         } else if (tipo === 'CERO_EXPUESTO') {
             msg = `¡${jugador.nombre} gana la partida con CERO CON GRUPO EXPUESTO (Victoria Diferida)!`;
+        } else if (tipo === 'POKER') {
+            msg = `¡${jugador.nombre} gana la partida con PÓKER (4 cartas iguales)!`;
+        } else if (tipo === 'COLOR') {
+            msg = `¡${jugador.nombre} gana la partida con COLOR (7 cartas del mismo palo)!`;
         }
         this.log(msg);
     }
@@ -727,24 +858,160 @@ export class GolpeadoGame {
                     esYo
                 };
             }),
-            resultadosVictoria: this.juegoTerminado ? this.obtenerResultadosVictoria() : null
+            resultadosVictoria: this.juegoTerminado ? this.obtenerResultadosVictoria() : null,
+            // En partida en curso el cliente pide el snapshot por socket (no se manda siempre:
+            // filtraría manos ajenas en serializar; el export completo va aparte).
+            informePartida: this.juegoTerminado ? this.generarInformePartida(viewerIndex) : null
+        };
+    }
+
+    /**
+     * Informe de depuración (partida en curso o terminada).
+     * Incluye historial, manos, victoria (si hay) y detección Color/Póker.
+     */
+    generarInformePartida(viewerIndex = null) {
+        const ganador = this.jugadores.find(j => j.id === this.ganadorId) || null;
+        const cartaTxt = (c) => (c ? `${c.label}${c.suitLabel}` : null);
+
+        return {
+            version: 1,
+            app: 'golpeado-game',
+            generadoEn: new Date().toISOString(),
+            viewerIndex,
+            enCurso: !this.juegoTerminado,
+            resumen: {
+                juegoTerminado: this.juegoTerminado,
+                tipoVictoria: this.tipoVictoria,
+                ganadorId: this.ganadorId,
+                ganadorNombre: ganador?.nombre ?? null,
+                turnoActual: this.turnoActual,
+                faseActual: this.faseActual,
+                jugadorEnTurno: this.jugadores[this.turnoActual]?.nombre ?? null,
+                mazoRecicladoUnaVez: this.mazoRecicladoUnaVez,
+                mazoRoboRestante: this.mazoRobo.length,
+                descarteCount: this.mazoDescarte.length,
+                descarteTop: this.mazoDescarte.length
+                    ? cartaTxt(this.mazoDescarte[this.mazoDescarte.length - 1])
+                    : null,
+                jugadorEnEspera: this.jugadorEnEspera,
+                turnosEsperaRestantes: this.turnosEsperaRestantes
+            },
+            jugadores: this.jugadores.map(j => {
+                const colorDetectado = cartasDeColor(j.mano).map(cartaTxt);
+                const pokerDetectado = cartasDePoker(j.mano).map(cartaTxt);
+                return {
+                    id: j.id,
+                    nombre: j.nombre,
+                    esGanador: this.juegoTerminado ? j.id === this.ganadorId : false,
+                    enTurno: j.id === this.turnoActual,
+                    tuvoRoboDescarte: !!j.tuvoRoboDescarte,
+                    cartasCount: j.mano.length,
+                    mano: j.mano.map(c => ({
+                        id: c.id,
+                        label: c.label,
+                        suit: c.suit,
+                        suitLabel: c.suitLabel,
+                        value: c.value,
+                        color: c.color,
+                        texto: cartaTxt(c)
+                    })),
+                    manoTexto: j.mano.map(cartaTxt),
+                    gruposExpuestos: j.gruposExpuestos.map(g => g.map(cartaTxt)),
+                    deteccionEspecial: {
+                        tieneColor: colorDetectado.length >= 7,
+                        cartasColor: colorDetectado,
+                        tienePoker: pokerDetectado.length >= 4,
+                        cartasPoker: pokerDetectado
+                    }
+                };
+            }),
+            resultadosVictoria: this.juegoTerminado ? this.obtenerResultadosVictoria() : null,
+            descarteCompleto: this.mazoDescarte.map(cartaTxt),
+            historial: this.historial.map(h => ({
+                mensaje: h.mensaje,
+                timestamp: h.timestamp instanceof Date
+                    ? h.timestamp.toISOString()
+                    : h.timestamp,
+                secreto: String(h.mensaje).startsWith('[Secreto]')
+            }))
         };
     }
 
     /**
      * Datos de tabla final (manos reveladas).
+     * Victoria COLOR/POKER: 0 puntos (equivalen a cero).
+     * - Color: muestra las ≥7 del mismo palo; la carta sobrante (si no se descartó) queda en sueltas.
+     * - Póker: muestra las 4 iguales; el resto de la mano queda en sueltas.
      */
     obtenerResultadosVictoria() {
         return this.jugadores.map(jugador => {
+            const esGanador = jugador.id === this.ganadorId;
+            const tipo = this.tipoVictoria;
+
+            if (esGanador && (tipo === 'COLOR' || tipo === 'POKER')) {
+                const cartasJugada = tipo === 'COLOR'
+                    ? cartasDeColor(jugador.mano)
+                    : cartasDePoker(jugador.mano);
+                const idsJugada = new Set(cartasJugada.map(c => c.id));
+                const sueltas = jugador.mano.filter(c => !idsJugada.has(c.id));
+                const jugada = {
+                    origen: tipo === 'COLOR' ? 'color' : 'poker',
+                    etiqueta: tipo === 'COLOR' ? 'Color' : 'Póker',
+                    cartas: cartasJugada.map(serializarCartaResumen)
+                };
+                return {
+                    id: jugador.id,
+                    nombre: jugador.nombre,
+                    esGanador: true,
+                    jugadaEspecial: tipo,
+                    grupos: jugada.cartas.length ? 1 : 0,
+                    gruposArmados: jugada.cartas.length ? [jugada] : [],
+                    puntosSueltas: 0,
+                    cartasSueltasText: sueltas.map(c => c.label + c.suitLabel).join(', ') || 'Ninguna',
+                    cartasSueltas: sueltas.map(c => ({
+                        id: c.id,
+                        label: c.label,
+                        suitLabel: c.suitLabel,
+                        color: c.color
+                    }))
+                };
+            }
+
             const opt = optimizarMano(jugador.mano, this.gruposEnMesa);
-            const totalGrupos = jugador.gruposExpuestos.length + opt.gruposPropios.length;
+            const gruposMesa = jugador.gruposExpuestos.map(g => ({
+                origen: 'mesa',
+                etiqueta: 'Mesa',
+                cartas: g.map(serializarCartaResumen)
+            }));
+            const gruposMano = opt.gruposPropios.map(g => ({
+                origen: 'mano',
+                etiqueta: 'Mano',
+                cartas: g.map(serializarCartaResumen)
+            }));
+            // Cada enchufe se muestra aparte para explicar cartas “desaparecidas” (0 pts / sin sueltas)
+            const gruposEnchufe = (opt.enchufes || []).map(e => ({
+                origen: 'enchufe',
+                etiqueta: 'Enchufe',
+                cartas: [serializarCartaResumen(e.carta)],
+                sobreGrupo: (e.grupoDestino || []).map(c => c.label + c.suitLabel).join(' ')
+            }));
+            const gruposArmados = [...gruposMesa, ...gruposMano, ...gruposEnchufe];
             return {
                 id: jugador.id,
                 nombre: jugador.nombre,
-                esGanador: jugador.id === this.ganadorId,
-                grupos: totalGrupos,
+                esGanador,
+                jugadaEspecial: null,
+                grupos: gruposMesa.length + gruposMano.length,
+                enchufes: gruposEnchufe.length,
+                gruposArmados,
                 puntosSueltas: opt.puntos,
-                cartasSueltasText: opt.sueltas.map(c => c.label + c.suitLabel).join(', ') || 'Ninguna'
+                cartasSueltasText: opt.sueltas.map(c => c.label + c.suitLabel).join(', ') || 'Ninguna',
+                cartasSueltas: opt.sueltas.map(c => ({
+                    id: c.id,
+                    label: c.label,
+                    suitLabel: c.suitLabel,
+                    color: c.color
+                }))
             };
         });
     }

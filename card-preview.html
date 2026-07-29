@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Vista previa — Carta</title>
+    <link rel="stylesheet" href="index.css">
+    <style>
+        /* Solo layout de esta página. Edita el estilo de la carta en index.css (.card, etc.) */
+        html, body {
+            margin: 0;
+            height: 100%;
+            overflow: hidden;
+        }
+
+        body.card-preview-page {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            background:
+                radial-gradient(at 20% 20%, hsla(253, 50%, 18%, 0.55) 0px, transparent 50%),
+                radial-gradient(at 80% 80%, hsla(225, 40%, 14%, 0.6) 0px, transparent 50%),
+                var(--bg-main);
+        }
+
+        .preview-hint {
+            position: fixed;
+            top: 1rem;
+            left: 50%;
+            transform: translateX(-50%);
+            color: var(--text-secondary);
+            font-size: 0.9rem;
+            text-align: center;
+            z-index: 2;
+            pointer-events: none;
+        }
+
+        .preview-hint code {
+            color: var(--color-accent-hover);
+        }
+
+        .preview-stage {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 100%;
+            height: 100%;
+        }
+
+        /* Amplía la carta real sin cambiar sus reglas base en index.css */
+        .preview-stage .card {
+            transform: scale(4.5);
+            transform-origin: center center;
+            cursor: default;
+        }
+
+        .preview-stage .card:hover {
+            transform: scale(4.5);
+        }
+    </style>
+</head>
+<body class="card-preview-page">
+    <p class="preview-hint">
+        Edita <code>index.css</code> (clases <code>.card</code>, <code>.card-value</code>, etc.) y recarga esta página.
+    </p>
+
+    <div class="preview-stage">
+        <!-- Misma estructura HTML que en el juego -->
+        <div class="card red" data-id="preview">
+            <div class="card-top">
+                <span class="card-value">A</span>
+                <span class="card-suit-mini">♥</span>
+            </div>
+            <div class="card-center">♥</div>
+            <div class="card-bottom">
+                <span class="card-value">A</span>
+                <span class="card-suit-mini">♥</span>
+            </div>
+        </div>
+    </div>
+</body>
+</html>

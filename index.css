@@ -56,12 +56,88 @@ body {
 /* ==========================================
    INTERFAZ DE LOBBY / REGISTRO
    ========================================== */
+.home-shell {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    flex-grow: 1;
+    width: 100%;
+    max-width: 520px;
+    margin: auto;
+}
+
+.lobby-settings-btn {
+    position: absolute;
+    top: 0.35rem;
+    right: 0.35rem;
+    z-index: 5;
+    width: 2rem;
+    height: 2rem;
+    padding: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 999px;
+    border: 1px solid var(--border-color);
+    background: rgba(255, 255, 255, 0.04);
+    color: var(--text-muted);
+    cursor: pointer;
+    transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease, transform 0.2s ease;
+}
+
+.lobby-settings-btn:hover,
+.lobby-settings-btn.is-open {
+    color: var(--text-primary);
+    border-color: var(--color-accent);
+    background: rgba(255, 255, 255, 0.08);
+}
+
+.lobby-settings-btn.is-open .lobby-settings-icon {
+    transform: rotate(45deg);
+}
+
+.lobby-settings-icon {
+    display: block;
+    transition: transform 0.25s ease;
+}
+
+.lobby-settings-panel {
+    position: absolute;
+    top: 2.6rem;
+    right: 0.35rem;
+    z-index: 6;
+    width: min(280px, calc(100% - 0.7rem));
+    padding: 0.9rem;
+    border-radius: 14px;
+    border: 1px solid var(--border-color);
+    background: var(--bg-card);
+    box-shadow: var(--shadow-lg);
+    animation: fadeIn var(--transition-normal);
+}
+
+.lobby-settings-title {
+    font-size: 0.95rem;
+    font-weight: 700;
+    color: var(--text-primary);
+    margin: 0 0 0.35rem;
+}
+
+.lobby-settings-desc {
+    font-size: 0.8rem;
+    color: var(--text-muted);
+    margin: 0 0 0.75rem;
+    line-height: 1.35;
+}
+
 .lobby-container {
     display: flex;
     flex-direction: column;
     align-items: center;
     justify-content: center;
     flex-grow: 1;
+    width: 100%;
     max-width: 500px;
     margin: auto;
     background: var(--bg-card);
@@ -164,6 +240,19 @@ body {
     margin: 0.75rem 0 1rem;
     text-align: center;
     font-size: 0.9rem;
+}
+
+.debug-scenarios {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 0.45rem;
+    margin: 0;
+}
+
+.btn-debug-scenario {
+    width: 100%;
+    font-size: 0.85rem;
+    padding: 0.55rem 0.65rem;
 }
 
 .host-badge,
@@ -399,11 +488,38 @@ body {
     display: flex;
     justify-content: space-between;
     align-items: center;
+    flex-wrap: wrap;
+    gap: 0.75rem;
     background: var(--bg-card);
     border: 1px solid var(--border-color);
     border-radius: 16px;
     padding: 1rem 1.5rem;
     box-shadow: var(--shadow-sm);
+}
+
+.btn-report-live {
+    margin-left: auto;
+    border: 1px solid var(--border-color);
+    background: transparent;
+    color: var(--text-secondary);
+    font-size: 0.8rem;
+    font-weight: 600;
+    padding: 0.4rem 0.75rem;
+    border-radius: 10px;
+    cursor: pointer;
+    transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+}
+
+.btn-report-live:hover {
+    color: var(--text-primary);
+    border-color: var(--color-accent);
+    background: rgba(255, 255, 255, 0.04);
+}
+
+.report-status-live {
+    margin: 0.35rem 0 0;
+    font-size: 0.8rem;
+    text-align: right;
 }
 
 .turn-player-info {
@@ -473,6 +589,7 @@ body {
     background: #fff;
     border-radius: 12px;
     box-shadow: var(--shadow-md);
+    box-sizing: content-box;
     cursor: pointer;
     display: flex;
     flex-direction: column;
@@ -799,16 +916,22 @@ body {
     animation: fadeIn var(--transition-normal);
 }
 
+.victory-overlay {
+    animation: victoryFadeIn 0.55s ease-out;
+}
+
 .victory-box {
     background: var(--bg-card);
     border: 2px solid var(--color-accent);
     border-radius: 32px;
-    padding: 3rem;
-    max-width: 600px;
-    width: 90%;
+    padding: 2.5rem;
+    max-width: 920px;
+    width: min(96vw, 920px);
+    max-height: 90vh;
+    overflow: auto;
     text-align: center;
     box-shadow: 0 0 50px var(--color-accent-glow);
-    animation: scaleIn var(--transition-normal);
+    animation: victoryPop 0.55s cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 .victory-title {
@@ -819,35 +942,264 @@ body {
 }
 
 .victory-subtitle {
-    font-size: 1.2rem;
+    font-size: 1.15rem;
     color: var(--text-secondary);
-    margin-bottom: 2rem;
+    margin-bottom: 1.25rem;
+}
+
+.victory-winner {
+    font-size: 1.35rem;
+    margin-bottom: 1.5rem;
+    color: var(--text-primary);
+}
+
+.victory-winner span {
+    color: var(--color-accent-hover);
+    font-weight: 700;
+}
+
+.victory-warning {
+    background: rgba(239, 68, 68, 0.15);
+    border: 1px solid var(--color-danger);
+    border-radius: 12px;
+    padding: 1rem;
+    margin-top: 1.5rem;
+    text-align: center;
+    color: var(--color-danger);
+    font-weight: 600;
+}
+
+.victory-restart {
+    max-width: 250px;
+    margin: 0;
+}
+
+.victory-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+    justify-content: center;
+    align-items: center;
+    margin-top: 1.25rem;
+}
+
+.victory-report {
+    max-width: 280px;
+}
+
+.victory-report-status {
+    margin-top: 0.75rem;
+    text-align: center;
+    font-size: 0.85rem;
+}
+
+.victory-wait {
+    margin-top: 0;
+    text-align: center;
+}
+
+.results-scroll {
+    overflow-x: auto;
+    margin-bottom: 0.5rem;
 }
 
 .results-table {
     width: 100%;
     border-collapse: collapse;
-    margin-bottom: 2.5rem;
+    margin-bottom: 1.5rem;
     text-align: left;
 }
 
 .results-table th {
     color: var(--text-muted);
     font-weight: 600;
-    font-size: 0.85rem;
+    font-size: 0.8rem;
     text-transform: uppercase;
     padding: 0.5rem 0.75rem;
     border-bottom: 1px solid var(--border-color);
+    white-space: nowrap;
 }
 
 .results-table td {
-    padding: 0.75rem;
+    padding: 0.85rem 0.75rem;
     border-bottom: 1px solid var(--border-color);
+    vertical-align: top;
 }
 
 .results-table tr.winner-row {
-    background: rgba(34, 197, 94, 0.08);
+    background: rgba(34, 197, 94, 0.1);
+}
+
+.results-table tr.loser-row {
+    background: rgba(239, 68, 68, 0.04);
+}
+
+.result-player {
+    min-width: 7.5rem;
+}
+
+.result-badge {
+    display: inline-block;
+    margin-top: 0.35rem;
+    font-size: 0.7rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    padding: 0.15rem 0.45rem;
+    border-radius: 6px;
+}
+
+.result-badge.win {
     color: var(--color-success);
+    background: rgba(34, 197, 94, 0.15);
+}
+
+.result-badge.lose {
+    color: var(--color-danger);
+    background: rgba(239, 68, 68, 0.12);
+}
+
+.result-groups {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.55rem;
+    max-width: 28rem;
+}
+
+.result-group {
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+    padding: 0.35rem 0.45rem;
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    background: rgba(255, 255, 255, 0.03);
+}
+
+.result-group-tag {
+    font-size: 0.65rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-muted);
+}
+
+.result-group-color .result-group-tag,
+.result-group-poker .result-group-tag {
+    color: var(--color-accent-hover);
+}
+
+.result-group-enchufe {
+    border-color: rgba(56, 189, 248, 0.45);
+    background: rgba(56, 189, 248, 0.08);
+}
+
+.result-group-enchufe .result-group-tag {
+    color: #38bdf8;
+}
+
+.result-group-sub {
+    display: block;
+    font-size: 0.65rem;
+    color: var(--text-muted);
+    line-height: 1.2;
+    max-width: 9rem;
+}
+
+.result-group-cards {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.25rem;
+}
+
+.result-mini-card {
+    display: inline-flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-width: 1.7rem;
+    padding: 0.15rem 0.3rem;
+    border-radius: 5px;
+    border: 1px solid var(--border-color);
+    background: var(--bg-primary, #12151c);
+    font-size: 0.72rem;
+    line-height: 1.1;
+    font-weight: 700;
+}
+
+.result-mini-card.red {
+    color: #ef4444;
+    border-color: rgba(239, 68, 68, 0.35);
+}
+
+.result-mini-card.black {
+    color: var(--text-primary);
+}
+
+.result-mini-suit {
+    font-size: 0.7rem;
+}
+
+.result-empty {
+    color: var(--text-muted);
+    font-size: 0.85rem;
+}
+
+.result-sueltas {
+    font-size: 0.9rem;
+    color: var(--text-secondary);
+}
+
+.result-points {
+    white-space: nowrap;
+    font-size: 1.05rem;
+}
+
+/* Transición partido → victoria */
+.page-exit {
+    animation: pageExit 0.38s ease-in forwards;
+    pointer-events: none;
+}
+
+.page-enter {
+    animation: none;
+}
+
+.page-enter .victory-box {
+    animation: victoryPop 0.55s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.page-transitioning {
+    overflow: hidden;
+}
+
+@keyframes pageExit {
+    from {
+        opacity: 1;
+        transform: scale(1) translateY(0);
+        filter: blur(0);
+    }
+    to {
+        opacity: 0;
+        transform: scale(0.96) translateY(12px);
+        filter: blur(6px);
+    }
+}
+
+@keyframes victoryFadeIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
+}
+
+@keyframes victoryPop {
+    from {
+        transform: translateY(28px) scale(0.92);
+        opacity: 0;
+    }
+    to {
+        transform: translateY(0) scale(1);
+        opacity: 1;
+    }
 }
 
 /* ==========================================
@@ -910,6 +1262,30 @@ body {
 body.is-reordering-cards {
     overflow: hidden;
     touch-action: none;
+}
+
+body.is-drawing-from-deck {
+    overflow: hidden;
+    touch-action: none;
+}
+
+#deckPile.deck-draggable {
+    cursor: grab;
+}
+
+#deckPile.deck-draggable.is-dragging {
+    opacity: 0.45;
+}
+
+.hand-cards-container.hand-drop-ready {
+    outline: 1px dashed transparent;
+    border-radius: 12px;
+    transition: outline-color var(--transition-fast), background var(--transition-fast);
+}
+
+.hand-cards-container.hand-drop-hover {
+    outline-color: var(--color-accent);
+    background: rgba(167, 139, 250, 0.08);
 }
 
 /* ==========================================
@@ -1036,6 +1412,7 @@ body.is-reordering-cards {
     .victory-box {
         padding: 1.5rem 1rem;
         margin: 0.5rem;
+        max-height: 92vh;
     }
 
     .victory-title {
@@ -1046,6 +1423,15 @@ body.is-reordering-cards {
         font-size: 0.8rem;
         display: block;
         overflow-x: auto;
+    }
+
+    .results-table-detailed th:nth-child(3),
+    .results-table-detailed td:nth-child(3) {
+        display: none;
+    }
+
+    .result-groups {
+        max-width: 100%;
     }
 }
 
