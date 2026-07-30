@@ -10,7 +10,7 @@ import { fileURLToPath } from 'url';
 import { Server } from 'socket.io';
 import { GolpeadoGame } from './game.js';
 import { jugarTurnoBot } from './bot.js';
-import { aplicarEscenarioDebug, listarIdsEscenarios } from './debug-scenarios.js';
+import { aplicarEscenarioDebug, aplicarEscenarioCustom, listarIdsEscenarios } from './debug-scenarios.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -358,6 +358,71 @@ io.on('connection', (socket) => {
 
         responder({ ok: true, room: serializarLobby(room, socket.id), scenarioId: id });
         console.log(`[Sala ${code}] debug «${id}» para ${nombreLimpio}`);
+    });
+
+    socket.on('playCustomDebug', ({ nombre, config } = {}, ack) => {
+        const responder = (data) => {
+            if (typeof ack === 'function') ack(data);
+        };
+
+        if (socket.data.roomCode) {
+            salirDeSala(socket);
+        }
+
+        const nombreLimpio = String(nombre || '').trim() || 'Jugador';
+        const code = generarCodigoSala();
+        const room = {
+            code,
+            hostId: socket.id,
+            status: 'lobby',
+            players: [{
+                socketId: socket.id,
+                nombre: nombreLimpio,
+                conectado: true,
+                esBot: false,
+                playerIndex: null
+            }],
+            game: null,
+            _botTimer: null,
+            esDebug: true
+        };
+        crearBot(room);
+        rooms.set(code, room);
+        socket.data.roomCode = code;
+        socket.join(code);
+
+        const listos = jugadoresListos(room);
+        room.players = listos;
+        room.players.forEach((p, idx) => {
+            p.playerIndex = idx;
+        });
+
+        room.game = new GolpeadoGame();
+        room.game.inicializarJuego(room.players.map(p => p.nombre));
+        room.game.juegoTerminado = false;
+        room.game.ganadorId = null;
+        room.game.tipoVictoria = null;
+
+        const cfg = config || {};
+        const slotsInfo = Array.isArray(cfg.miManoSlots) ? cfg.miManoSlots.length : 0;
+        console.log(`[Sala ${code}] custom slots mi=${slotsInfo} texto="${String(cfg.miMano || '').slice(0, 80)}"`);
+
+        const aplicado = aplicarEscenarioCustom(room.game, cfg);
+        if (!aplicado.ok) {
+            rooms.delete(code);
+            socket.leave(code);
+            socket.data.roomCode = null;
+            responder({ ok: false, error: aplicado.error || 'No se pudo aplicar el custom.' });
+            return;
+        }
+
+        room.status = room.game.juegoTerminado ? 'finished' : 'playing';
+        emitirLobby(room);
+        emitirGameState(room);
+        if (room.status === 'playing') programarTurnosBot(room);
+
+        responder({ ok: true, room: serializarLobby(room, socket.id) });
+        console.log(`[Sala ${code}] debug custom para ${nombreLimpio}`);
     });
 
     socket.on('leaveRoom', () => {

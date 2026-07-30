@@ -326,6 +326,8 @@ export class GolpeadoGame {
         this.ganadorId = null;
         this.tipoVictoria = null; // 'CERO_MANO', 'CERO_EXPUESTO', 'PUNTOS', 'POKER', 'COLOR'
         this.mazoRecicladoUnaVez = false; // Victoria póker/color solo antes del 1er reciclaje
+        this.permitirVictoriaColor = true;
+        this.permitirVictoriaPoker = true;
         
         // Historial de eventos del juego para la UI
         this.historial = [];
@@ -348,6 +350,8 @@ export class GolpeadoGame {
         this.mazoDescarte = [];
         this.historial = [];
         this.mazoRecicladoUnaVez = false;
+        this.permitirVictoriaColor = true;
+        this.permitirVictoriaPoker = true;
 
         // 1. Crear baraja
         const baraja = [];
@@ -610,11 +614,11 @@ export class GolpeadoGame {
     verificarVictoriaEspecial(jugador) {
         if (!this.elegibleVictoriaEspecial(jugador)) return;
 
-        if (this.tienePokerEnMano(jugador.mano)) {
+        if (this.permitirVictoriaPoker !== false && this.tienePokerEnMano(jugador.mano)) {
             this.declararVictoria(jugador.id, 'POKER');
             return;
         }
-        if (this.tieneColorEnMano(jugador.mano)) {
+        if (this.permitirVictoriaColor !== false && this.tieneColorEnMano(jugador.mano)) {
             this.declararVictoria(jugador.id, 'COLOR');
         }
     }

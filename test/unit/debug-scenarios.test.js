@@ -4,7 +4,7 @@ import { GolpeadoGame } from '../../game.js';
 import { aplicarEscenarioDebug, DEBUG_SCENARIOS } from '../../debug-scenarios.js';
 
 describe('escenarios debug (lobby)', () => {
-    for (const meta of DEBUG_SCENARIOS) {
+    for (const meta of DEBUG_SCENARIOS.filter(s => !s.opensForm)) {
         it(`carga «${meta.id}» y deja partida terminada`, () => {
             const game = new GolpeadoGame();
             game.inicializarJuego(['Jugador', 'Bot Ana']);

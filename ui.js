@@ -5,15 +5,17 @@
 
 import { esGrupoValido } from './game.js';
 import { playSound, bindAudioUnlock } from './sounds.js';
-import { DEBUG_SCENARIOS } from './debug-scenarios.js';
+import { DEBUG_SCENARIOS, detectarGruposEnSlots, claveGrupoSlots } from './debug-scenarios.js';
 
 const socket = window.io();
 const appEl = document.getElementById('app');
 
 bindAudioUnlock();
 
-/** @type {'home'|'room'|'game'|'victory'} */
+/** @type {'home'|'room'|'game'|'victory'|'customDebug'} */
 let screen = 'home';
+/** Nombre capturado al abrir el formulario custom */
+let customDebugPlayerName = 'Jugador';
 /** @type {object|null} */
 let roomState = null;
 /** @type {object|null} */
@@ -296,6 +298,7 @@ function render() {
     limpiarFantasmaDragHuerfano();
     if (screen === 'home') return renderHome();
     if (screen === 'room') return renderRoom();
+    if (screen === 'customDebug') return renderCustomDebugForm();
     if (screen === 'victory') return renderVictoryScreen();
     if (screen === 'game') return renderBoard();
     renderHome();
@@ -446,7 +449,7 @@ function renderHome() {
 
             <div id="lobbySettingsPanel" class="lobby-settings-panel" hidden>
                 <h3 class="lobby-settings-title">Partidas de prueba</h3>
-                <p class="lobby-settings-desc">Carga una partida ya resuelta para mirar la tabla final.</p>
+                <p class="lobby-settings-desc">Partidas resueltas para mirar la tabla, o Custom para armar una a mano.</p>
                 <div class="debug-scenarios">
                     ${DEBUG_SCENARIOS.map(s => `
                         <button type="button" class="btn-secondary btn-debug-scenario" data-scenario="${escapeAttr(s.id)}" title="${escapeAttr(s.hint)}">
@@ -514,8 +517,17 @@ function renderHome() {
         btn.addEventListener('click', () => {
             playSound('click');
             const scenarioId = btn.dataset.scenario;
+            const meta = DEBUG_SCENARIOS.find(s => s.id === scenarioId);
             const nombre = document.getElementById('playerName').value.trim() || 'Jugador';
             showError('');
+
+            if (meta?.opensForm) {
+                customDebugPlayerName = nombre;
+                screen = 'customDebug';
+                render();
+                return;
+            }
+
             socket.emit('playDebugScenario', { nombre, scenarioId }, (res) => {
                 if (!res?.ok) showError(res?.error || 'No se pudo cargar el escenario');
             });
@@ -547,6 +559,610 @@ function renderHome() {
 
     document.getElementById('roomCode').addEventListener('input', (e) => {
         e.target.value = e.target.value.replace(/\D/g, '').slice(0, 4);
+    });
+}
+
+function renderCustomDebugForm() {
+    const suitCycle = [
+        { key: 'H', label: '♥', cls: 'suit-red' },
+        { key: 'S', label: '♠', cls: 'suit-black' },
+        { key: 'D', label: '♦', cls: 'suit-red' },
+        { key: 'C', label: '♣', cls: 'suit-black' },
+        { key: '?', label: '?', cls: 'suit-random' }
+    ];
+    const rankOptions = [
+        ['?', '?'],
+        ['1', 'A'], ['2', '2'], ['3', '3'], ['4', '4'], ['5', '5'], ['6', '6'],
+        ['7', '7'], ['8', '8'], ['9', '9'], ['10', '10'], ['11', 'J'], ['12', 'Q'], ['13', 'K']
+    ];
+
+    const rankSelectHtml = () => rankOptions.map(([v, lab]) =>
+        `<option value="${v}">${lab}</option>`
+    ).join('');
+
+    const pickerHtml = (group, index) => `
+        <div class="card-picker" data-group="${escapeAttr(group)}" data-index="${index}">
+            <select class="card-picker-rank" aria-label="Valor de carta">${rankSelectHtml()}</select>
+            <button type="button" class="card-picker-suit suit-random" data-suit="?" title="Clic para cambiar palo" aria-label="Palo">?</button>
+        </div>
+    `;
+
+    appEl.innerHTML = `
+        <div class="custom-debug-page">
+            <div class="custom-debug-box">
+                <div class="custom-debug-header">
+                    <h1 class="custom-debug-title">Partida custom</h1>
+                    <button type="button" id="btnCustomBack" class="btn-secondary btn-custom-back">Volver</button>
+                </div>
+                <p class="custom-debug-lead">
+                    Al elegir valor <strong>o</strong> palo aparece el siguiente selector.
+                    Máximo 8; si uno llega a 8, el otro solo puede llegar a 7.
+                    Con más de 2 selectores: deslizá o clic derecho para borrarlos.
+                    Si hay 1–2: el vacío no se borra; uno con valor/palo se limpia.
+                    Si formás un grupo (mismo número ×3/4 o escalera), las cartas se resaltan
+                    y aparece un botón junto al contador para marcarlo como <strong>en mano</strong> o <strong>en mesa</strong>.
+                    No se puede repetir la misma carta (palo+valor): el ciclo de palo salta duplicados
+                    y el select deshabilita valores ya usados con ese palo.
+                </p>
+
+                <div class="custom-debug-grid">
+                    <section class="custom-debug-section">
+                        <h2 class="custom-hand-heading">
+                            Tus cartas
+                            <span class="custom-hand-count" id="countMi">0/8</span>
+                            <span class="custom-group-toggles" id="groupTogglesMi"></span>
+                        </h2>
+                        <div class="card-picker-grid" id="pickersMiMano"></div>
+                    </section>
+
+                    <section class="custom-debug-section">
+                        <h2 class="custom-hand-heading">
+                            Rival
+                            <span class="custom-hand-count" id="countRival">0/8</span>
+                            <span class="custom-group-toggles" id="groupTogglesRival"></span>
+                        </h2>
+                        <div class="card-picker-grid" id="pickersRivalMano"></div>
+                    </section>
+
+                    <section class="custom-debug-section custom-debug-section-full">
+                        <h2>Mazo y reglas</h2>
+                        <div class="custom-debug-row">
+                            <div>
+                                <label class="custom-label">Última carta del descarte</label>
+                                <div class="card-picker-grid card-picker-grid-single" id="pickersDescarte">${pickerHtml('descarte', 0)}</div>
+                            </div>
+                            <div>
+                                <label class="custom-label" for="cfgMazoRestante">Cartas restantes en mazo de robo</label>
+                                <input type="number" id="cfgMazoRestante" min="0" max="52" placeholder="Vacío = máximo disponible">
+                            </div>
+                        </div>
+                        <label class="custom-label">Próximas del mazo <span class="custom-hand-count" id="countProxima">0</span></label>
+                        <div class="card-picker-grid" id="pickersProximas"></div>
+                        <div class="custom-debug-checks">
+                            <label class="custom-check">
+                                <input type="checkbox" id="cfgColor" checked>
+                                Habilitar victoria por Color
+                            </label>
+                            <label class="custom-check">
+                                <input type="checkbox" id="cfgPoker" checked>
+                                Habilitar victoria por Póker
+                            </label>
+                        </div>
+                    </section>
+                </div>
+
+                <p id="customDebugError" class="lobby-error" hidden></p>
+                <button type="button" id="btnCustomStart" class="btn-primary custom-debug-start">Iniciar partida</button>
+            </div>
+        </div>
+    `;
+
+    const showError = (msg) => {
+        const el = document.getElementById('customDebugError');
+        el.hidden = !msg;
+        el.textContent = msg || '';
+    };
+
+    /** lugar por clave de grupo detectado: 'mano' | 'mesa' */
+    const groupLugar = {
+        mi: new Map(),
+        rival: new Map()
+    };
+
+    const GROUP_COLORS = ['#22d3ee', '#34d399', '#fbbf24', '#fb7185'];
+
+    const tipoLabel = (tipo) => {
+        if (tipo === 'poker') return 'Póker';
+        if (tipo === 'trio') return 'Trío';
+        if (tipo === 'escalera') return 'Escalera';
+        return 'Grupo';
+    };
+
+    const applySuitVisual = (btn, suitKey) => {
+        const next = suitCycle.find(s => s.key === suitKey) || suitCycle[suitCycle.length - 1];
+        btn.dataset.suit = next.key;
+        btn.textContent = next.label;
+        btn.className = `card-picker-suit ${next.cls}`;
+    };
+
+    /** Códigos completos ya usados (palo+valor), excluyendo un picker. */
+    const getTakenCodes = (exceptEl = null) => {
+        const taken = new Set();
+        appEl.querySelectorAll('.card-picker').forEach(p => {
+            if (exceptEl && p === exceptEl) return;
+            if (!isComplete(p)) return;
+            const rank = p.querySelector('.card-picker-rank')?.value;
+            const suit = p.querySelector('.card-picker-suit')?.dataset.suit;
+            if (rank && suit) taken.add(`${suit}${rank}`);
+        });
+        return taken;
+    };
+
+    /**
+     * Caso 1: ciclar palo saltando combinaciones ya existentes
+     * (solo aplica si el valor ya está elegido).
+     */
+    const cycleSuitSkippingDupes = (pickerEl, btn) => {
+        const rank = pickerEl.querySelector('.card-picker-rank')?.value;
+        const taken = getTakenCodes(pickerEl);
+        const start = suitCycle.findIndex(s => s.key === btn.dataset.suit);
+        const from = start >= 0 ? start : suitCycle.length - 1;
+
+        for (let step = 1; step <= suitCycle.length; step++) {
+            const next = suitCycle[(from + step) % suitCycle.length];
+            if (rank && rank !== '?' && next.key !== '?') {
+                if (taken.has(`${next.key}${rank}`)) continue;
+            }
+            applySuitVisual(btn, next.key);
+            return;
+        }
+        applySuitVisual(btn, '?');
+    };
+
+    /**
+     * Caso 2: con palo fijado, deshabilitar valores que formen carta duplicada.
+     */
+    const refreshRankOptions = (pickerEl) => {
+        const select = pickerEl.querySelector('.card-picker-rank');
+        const suitBtn = pickerEl.querySelector('.card-picker-suit');
+        if (!select || !suitBtn) return;
+
+        const suit = suitBtn.dataset.suit;
+        const taken = getTakenCodes(pickerEl);
+        const prev = select.value;
+
+        [...select.options].forEach(opt => {
+            if (opt.value === '?') {
+                opt.disabled = false;
+                return;
+            }
+            if (suit && suit !== '?') {
+                opt.disabled = taken.has(`${suit}${opt.value}`);
+            } else {
+                opt.disabled = false;
+            }
+        });
+
+        // Si el valor actual quedó bloqueado, volver a ?
+        const currentOpt = [...select.options].find(o => o.value === select.value);
+        if (currentOpt?.disabled) {
+            select.value = '?';
+        } else if (prev && prev !== select.value) {
+            // noop
+        }
+    };
+
+    const refreshAllDuplicateGuards = () => {
+        appEl.querySelectorAll('.card-picker').forEach(refreshRankOptions);
+    };
+
+    const isComplete = (el) => {
+        const rank = el.querySelector('.card-picker-rank')?.value;
+        const suit = el.querySelector('.card-picker-suit')?.dataset.suit;
+        return rank && rank !== '?' && suit && suit !== '?';
+    };
+
+    /** Empezó a elegirse: valor o palo (cualquiera de los dos). */
+    const isStarted = (el) => {
+        const rank = el.querySelector('.card-picker-rank')?.value;
+        const suit = el.querySelector('.card-picker-suit')?.dataset.suit;
+        return (rank && rank !== '?') || (suit && suit !== '?');
+    };
+
+    const countStarted = (group) =>
+        [...appEl.querySelectorAll(`.card-picker[data-group="${group}"]`)].filter(isStarted).length;
+
+    const countComplete = (group) =>
+        [...appEl.querySelectorAll(`.card-picker[data-group="${group}"]`)].filter(isComplete).length;
+
+    const maxFor = (group) => {
+        if (group === 'proxima') return 12;
+        if (group === 'mi') return countStarted('rival') >= 8 ? 7 : 8;
+        if (group === 'rival') return countStarted('mi') >= 8 ? 7 : 8;
+        return 1;
+    };
+
+    const bindPicker = (el) => {
+        const rank = el.querySelector('.card-picker-rank');
+        const suitBtn = el.querySelector('.card-picker-suit');
+        let ignoreSuitClick = false;
+
+        const clearPicker = (pickerEl) => {
+            const r = pickerEl.querySelector('.card-picker-rank');
+            const s = pickerEl.querySelector('.card-picker-suit');
+            if (r) r.value = '?';
+            if (s) {
+                s.dataset.suit = '?';
+                s.textContent = '?';
+                s.className = 'card-picker-suit suit-random';
+            }
+            refreshRankOptions(pickerEl);
+        };
+
+        /**
+         * Swipe / clic derecho:
+         * - descarte: siempre limpia
+         * - >2 selectores: elimina cualquiera
+         * - ≤2: vacío → no hace nada; con valor/palo → limpia (no elimina)
+         * @returns {boolean} true si hubo acción
+         */
+        const removeOrClearPicker = (pickerEl) => {
+            const group = pickerEl.dataset.group;
+
+            if (group === 'descarte') {
+                if (!isStarted(pickerEl)) return false;
+                clearPicker(pickerEl);
+                refreshAllDuplicateGuards();
+                return true;
+            }
+
+            const container = pickerEl.parentElement;
+            if (!container) return false;
+            const count = container.querySelectorAll('.card-picker').length;
+
+            if (count > 2) {
+                pickerEl.remove();
+                syncHandGroup(group);
+                return true;
+            }
+
+            // 1 o 2 selectores: no eliminar; solo limpiar si tiene datos
+            if (!isStarted(pickerEl)) return false;
+            clearPicker(pickerEl);
+            syncHandGroup(group);
+            return true;
+        };
+
+        rank.addEventListener('change', () => {
+            playSound('select');
+            // Si el palo actual + nuevo valor es duplicado, saltar el palo
+            const suit = suitBtn.dataset.suit;
+            const val = rank.value;
+            if (suit && suit !== '?' && val && val !== '?') {
+                const taken = getTakenCodes(el);
+                if (taken.has(`${suit}${val}`)) {
+                    applySuitVisual(suitBtn, '?');
+                }
+            }
+            syncHandGroup(el.dataset.group);
+            refreshAllDuplicateGuards();
+        });
+        // Al abrir el select, refrescar opciones deshabilitadas (caso 2)
+        rank.addEventListener('focus', () => refreshRankOptions(el));
+        rank.addEventListener('mousedown', () => refreshRankOptions(el));
+
+        suitBtn.addEventListener('click', (e) => {
+            if (ignoreSuitClick) {
+                ignoreSuitClick = false;
+                e.preventDefault();
+                e.stopPropagation();
+                return;
+            }
+            playSound('click');
+            cycleSuitSkippingDupes(el, suitBtn);
+            syncHandGroup(el.dataset.group);
+            refreshAllDuplicateGuards();
+        });
+
+        // Clic derecho → misma acción que swipe, sin efecto visual
+        el.addEventListener('contextmenu', (e) => {
+            e.preventDefault();
+            if (removeOrClearPicker(el)) {
+                playSound('discard');
+            }
+        });
+
+        // Swipe en cualquier dirección → borrar / limpiar (con aviso rojo)
+        const SWIPE_ARM_PX = 14;
+        const SWIPE_DELETE_PX = 42;
+        let swipe = null; // { pointerId, x0, y0, active, fromControl }
+
+        const resetSwipeVisual = () => {
+            el.classList.remove('card-picker-swipe-warn');
+            el.style.transform = '';
+            el.style.opacity = '';
+        };
+
+        el.addEventListener('pointerdown', (e) => {
+            if (e.pointerType === 'mouse' && e.button !== 0) return;
+            const fromControl = !!e.target.closest('.card-picker-suit, .card-picker-rank');
+            swipe = {
+                pointerId: e.pointerId,
+                x0: e.clientX,
+                y0: e.clientY,
+                active: false,
+                fromControl
+            };
+            // No capturar aquí: en Chrome cancela el click del palo/select.
+        });
+
+        el.addEventListener('pointermove', (e) => {
+            if (!swipe || e.pointerId !== swipe.pointerId) return;
+            const dx = e.clientX - swipe.x0;
+            const dy = e.clientY - swipe.y0;
+            const dist = Math.hypot(dx, dy);
+            if (dist < SWIPE_ARM_PX) return;
+
+            // Clic de mouse en palo/valor: no convertir micro-movimientos en swipe
+            if (swipe.fromControl && e.pointerType === 'mouse') return;
+
+            if (!swipe.active) {
+                swipe.active = true;
+                try { el.setPointerCapture(e.pointerId); } catch (_) {}
+                if (document.activeElement === rank) rank.blur();
+            }
+
+            e.preventDefault();
+            const warn = dist >= SWIPE_DELETE_PX;
+            el.classList.toggle('card-picker-swipe-warn', warn);
+            const k = 0.4;
+            el.style.transform = `translate(${dx * k}px, ${dy * k}px) scale(${warn ? 0.96 : 1})`;
+            el.style.opacity = warn ? '0.85' : '1';
+        });
+
+        const endSwipe = (e) => {
+            if (!swipe || e.pointerId !== swipe.pointerId) return;
+            const dx = e.clientX - swipe.x0;
+            const dy = e.clientY - swipe.y0;
+            const dist = Math.hypot(dx, dy);
+            const wasActive = swipe.active;
+            const shouldAct = wasActive && dist >= SWIPE_DELETE_PX;
+            swipe = null;
+            try { el.releasePointerCapture(e.pointerId); } catch (_) {}
+
+            resetSwipeVisual();
+
+            if (!shouldAct) return;
+
+            ignoreSuitClick = true;
+            window.setTimeout(() => { ignoreSuitClick = false; }, 80);
+
+            if (removeOrClearPicker(el)) {
+                playSound('discard');
+            }
+        };
+
+        el.addEventListener('pointerup', endSwipe);
+        el.addEventListener('pointercancel', endSwipe);
+    };
+
+    const addPicker = (group, container) => {
+        const index = container.querySelectorAll('.card-picker').length;
+        container.insertAdjacentHTML('beforeend', pickerHtml(group, index));
+        const el = container.lastElementChild;
+        bindPicker(el);
+        return el;
+    };
+
+    const enforceMaxAndEmptySlot = (group, container) => {
+        const max = maxFor(group);
+        let pickers = [...container.querySelectorAll('.card-picker')];
+
+        // Si pasamos el tope de “empezados”, quitar el último empezado
+        while (countStarted(group) > max) {
+            const started = [...container.querySelectorAll('.card-picker')].filter(isStarted);
+            const last = started[started.length - 1];
+            if (!last) break;
+            last.remove();
+        }
+
+        pickers = [...container.querySelectorAll('.card-picker')];
+        const idle = pickers.filter(p => !isStarted(p));
+        // Un solo vacío al final
+        idle.slice(0, -1).forEach(p => p.remove());
+
+        pickers = [...container.querySelectorAll('.card-picker')];
+        const started = countStarted(group);
+        const hasIdle = pickers.some(p => !isStarted(p));
+
+        if (started < max && !hasIdle) {
+            addPicker(group, container);
+        }
+        if (pickers.length === 0) {
+            addPicker(group, container);
+        }
+    };
+
+    const collectSlots = (group) => {
+        const slots = [];
+        appEl.querySelectorAll(`.card-picker[data-group="${group}"]`).forEach(el => {
+            if (!isStarted(el)) return;
+            const rank = el.querySelector('.card-picker-rank').value;
+            const suit = el.querySelector('.card-picker-suit').dataset.suit;
+            slots.push({
+                suit: suit && suit !== '?' ? suit : null,
+                value: rank && rank !== '?' ? Number(rank) : null
+            });
+        });
+        return slots;
+    };
+
+    /** Texto de respaldo: H5, H?, ?10 (el servidor también lo entiende). */
+    const collectCodes = (group) => {
+        return collectSlots(group)
+            .map(s => `${s.suit || '?'}${s.value != null ? s.value : '?'}`)
+            .join(' ');
+    };
+
+    const collectGruposDetectados = (handKey) => {
+        const slots = collectSlots(handKey);
+        const detected = detectarGruposEnSlots(slots);
+        const lugarMap = groupLugar[handKey];
+        return detected.map(g => {
+            const key = claveGrupoSlots(slots, g.indices, g.tipo);
+            return {
+                indices: g.indices,
+                key,
+                tipo: g.tipo,
+                lugar: lugarMap.get(key) || 'mano'
+            };
+        });
+    };
+
+    const refreshDetectedGroups = (handKey) => {
+        if (handKey !== 'mi' && handKey !== 'rival') return;
+
+        const container = document.getElementById(handKey === 'mi' ? 'pickersMiMano' : 'pickersRivalMano');
+        const togglesEl = document.getElementById(handKey === 'mi' ? 'groupTogglesMi' : 'groupTogglesRival');
+        if (!container || !togglesEl) return;
+
+        const pickers = [...container.querySelectorAll('.card-picker')].filter(isStarted);
+        pickers.forEach(p => {
+            p.classList.remove('card-picker-in-group', 'card-picker-group-mesa', 'card-picker-group-mano');
+            p.style.removeProperty('--group-glow');
+            delete p.dataset.groupKey;
+        });
+
+        const slots = collectSlots(handKey);
+        const detected = detectarGruposEnSlots(slots);
+        const lugarMap = groupLugar[handKey];
+        const keyed = detected.map(g => ({
+            ...g,
+            key: claveGrupoSlots(slots, g.indices, g.tipo)
+        }));
+        const alive = new Set(keyed.map(g => g.key));
+        for (const k of [...lugarMap.keys()]) {
+            if (!alive.has(k)) lugarMap.delete(k);
+        }
+
+        togglesEl.innerHTML = keyed.map((g, gi) => {
+            const color = GROUP_COLORS[gi % GROUP_COLORS.length];
+            const lugar = lugarMap.get(g.key) || 'mano';
+            if (!lugarMap.has(g.key)) lugarMap.set(g.key, 'mano');
+            for (const idx of g.indices) {
+                const el = pickers[idx];
+                if (!el) continue;
+                el.classList.add('card-picker-in-group');
+                el.classList.add(lugar === 'mesa' ? 'card-picker-group-mesa' : 'card-picker-group-mano');
+                el.style.setProperty('--group-glow', color);
+                el.dataset.groupKey = g.key;
+            }
+            const label = `${tipoLabel(g.tipo)} · ${lugar === 'mesa' ? 'en mesa' : 'en mano'}`;
+            return `<button type="button" class="custom-group-toggle" data-hand="${handKey}" data-gkey="${escapeAttr(g.key)}" style="--group-glow:${color}" title="Clic para alternar mano/mesa">${escapeHtml(label)}</button>`;
+        }).join('');
+
+        togglesEl.querySelectorAll('.custom-group-toggle').forEach(btn => {
+            btn.addEventListener('click', () => {
+                playSound('click');
+                const key = btn.dataset.gkey;
+                const cur = lugarMap.get(key) || 'mano';
+                const next = cur === 'mano' ? 'mesa' : 'mano';
+                lugarMap.set(key, next);
+                refreshDetectedGroups(handKey);
+            });
+        });
+    };
+
+    const syncHandGroup = (group) => {
+        if (group === 'descarte') return;
+
+        const containerId = group === 'mi'
+            ? 'pickersMiMano'
+            : group === 'rival'
+                ? 'pickersRivalMano'
+                : 'pickersProximas';
+        const container = document.getElementById(containerId);
+        if (!container) return;
+
+        enforceMaxAndEmptySlot(group, container);
+
+        if (group === 'mi') {
+            document.getElementById('countMi').textContent =
+                `${countStarted('mi')}/${maxFor('mi')}`;
+            enforceMaxAndEmptySlot('rival', document.getElementById('pickersRivalMano'));
+            document.getElementById('countRival').textContent =
+                `${countStarted('rival')}/${maxFor('rival')}`;
+            document.getElementById('countMi').textContent =
+                `${countStarted('mi')}/${maxFor('mi')}`;
+            refreshDetectedGroups('mi');
+            refreshDetectedGroups('rival');
+            refreshAllDuplicateGuards();
+            return;
+        }
+        if (group === 'rival') {
+            document.getElementById('countRival').textContent =
+                `${countStarted('rival')}/${maxFor('rival')}`;
+            enforceMaxAndEmptySlot('mi', document.getElementById('pickersMiMano'));
+            document.getElementById('countMi').textContent =
+                `${countStarted('mi')}/${maxFor('mi')}`;
+            document.getElementById('countRival').textContent =
+                `${countStarted('rival')}/${maxFor('rival')}`;
+            refreshDetectedGroups('mi');
+            refreshDetectedGroups('rival');
+            refreshAllDuplicateGuards();
+            return;
+        }
+        if (group === 'proxima') {
+            document.getElementById('countProxima').textContent = String(countStarted('proxima'));
+            refreshAllDuplicateGuards();
+        }
+    };
+
+    // Estado inicial: un selector vacío por mano + próximas
+    addPicker('mi', document.getElementById('pickersMiMano'));
+    addPicker('rival', document.getElementById('pickersRivalMano'));
+    addPicker('proxima', document.getElementById('pickersProximas'));
+    bindPicker(document.querySelector('#pickersDescarte .card-picker'));
+    document.getElementById('countMi').textContent = `0/${maxFor('mi')}`;
+    document.getElementById('countRival').textContent = `0/${maxFor('rival')}`;
+
+    document.getElementById('btnCustomBack').addEventListener('click', () => {
+        playSound('click');
+        screen = 'home';
+        render();
+    });
+
+    document.getElementById('btnCustomStart').addEventListener('click', () => {
+        playSound('click');
+        showError('');
+        const mazoRaw = document.getElementById('cfgMazoRestante').value.trim();
+        const descarteSlots = collectSlots('descarte');
+        const config = {
+            miManoSlots: collectSlots('mi'),
+            rivalManoSlots: collectSlots('rival'),
+            mazoProximasSlots: collectSlots('proxima'),
+            descarteSlot: descarteSlots[0] || null,
+            miMano: collectCodes('mi'),
+            rivalMano: collectCodes('rival'),
+            mazoProximas: collectCodes('proxima'),
+            descarteTop: collectCodes('descarte'),
+            miGruposDetectados: collectGruposDetectados('mi'),
+            rivalGruposDetectados: collectGruposDetectados('rival'),
+            mazoRestante: mazoRaw === '' ? null : Number(mazoRaw),
+            permitirVictoriaColor: document.getElementById('cfgColor').checked,
+            permitirVictoriaPoker: document.getElementById('cfgPoker').checked
+        };
+
+        if (countStarted('mi') === 8 && countStarted('rival') === 8) {
+            showError('Solo uno puede tener 8 cartas.');
+            return;
+        }
+
+        socket.emit('playCustomDebug', { nombre: customDebugPlayerName, config }, (res) => {
+            if (!res?.ok) {
+                showError(res?.error || 'No se pudo iniciar el custom');
+            }
+        });
     });
 }
 
