@@ -1467,10 +1467,12 @@ function actualizarEstadoBotones(puedeInteractuar) {
 
     if (!puedeInteractuar) {
         btnDescartar.disabled = true;
-        btnDescartar.innerText = 'Esperando tu turno';
+        btnDescartar.innerText = 'Descartar';
+        btnDescartar.title = 'Esperando tu turno';
         if (btnCantarPuntos) {
             btnCantarPuntos.disabled = true;
-            btnCantarPuntos.innerText = 'Cantar por Puntos';
+            btnCantarPuntos.innerText = 'Cantar';
+            btnCantarPuntos.title = 'Esperando tu turno';
         }
         if (btnRobarDescarte) btnRobarDescarte.style.display = 'none';
         return;
@@ -1478,22 +1480,27 @@ function actualizarEstadoBotones(puedeInteractuar) {
 
     if (fase !== 'DESCARTE') {
         btnDescartar.disabled = true;
-        btnDescartar.innerText = 'Descartar (Primero roba)';
+        btnDescartar.innerText = 'Descartar';
+        btnDescartar.title = 'Primero robá una carta';
     } else if (cartasSeleccionadasIds.length === 1) {
         btnDescartar.disabled = false;
-        btnDescartar.innerText = 'Descartar Selección';
+        btnDescartar.innerText = 'Descartar';
+        btnDescartar.title = 'Descartar la carta seleccionada';
     } else {
         btnDescartar.disabled = true;
-        btnDescartar.innerText = 'Descartar (Elige 1 carta)';
+        btnDescartar.innerText = 'Descartar';
+        btnDescartar.title = 'Elegí 1 carta para descartar';
     }
 
     if (btnCantarPuntos) {
         if (fase === 'ROBO') {
             btnCantarPuntos.disabled = false;
-            btnCantarPuntos.innerText = 'Cantar por Puntos';
+            btnCantarPuntos.innerText = 'Cantar';
+            btnCantarPuntos.title = 'Cantar victoria por puntos';
         } else {
             btnCantarPuntos.disabled = true;
-            btnCantarPuntos.innerText = 'Cantar por Puntos (Bloqueado)';
+            btnCantarPuntos.innerText = 'Cantar';
+            btnCantarPuntos.title = 'Solo en fase de robo';
         }
     }
 
@@ -1502,16 +1509,17 @@ function actualizarEstadoBotones(puedeInteractuar) {
         const grupo = [gameState.descarteTop, ...cartasAsociadas];
         if (esGrupoValido(grupo)) {
             btnRobarDescarte.style.display = 'inline-block';
-            btnRobarDescarte.innerText = 'Robar descarte y bajar grupo';
+            btnRobarDescarte.innerText = 'Robar descarte';
+            btnRobarDescarte.title = 'Formar grupo con el descarte';
             btnRobarDescarte.onclick = () => {
                 const ids = [...cartasSeleccionadasIds];
                 cartasSeleccionadasIds = [];
                 enviarAccion('ROBAR_DESCARTE', { cartasIds: ids });
             };
-        } else {
+        } else if (btnRobarDescarte) {
             btnRobarDescarte.style.display = 'none';
         }
-    } else {
+    } else if (btnRobarDescarte) {
         btnRobarDescarte.style.display = 'none';
     }
 }
