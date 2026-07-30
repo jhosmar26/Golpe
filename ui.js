@@ -325,39 +325,39 @@ function preservarOrdenManoLocal(prevState, nextState) {
 function actualizarTableroSinMano() {
     if (!gameState || screen !== 'game') return;
     if (!document.getElementById('handCards')) {
-        // No hay tablero montado: hace falta render completo cuando se pueda
         return;
     }
 
     const fase = gameState.faseActual;
     const esMiTurno = gameState.esMiTurno;
-    const jugadorTurno = gameState.jugadores.find(j => j.id === gameState.turnoActual);
     const puedeInteractuar = esMiTurno && !gameState.juegoTerminado;
 
-    const badge = document.querySelector('.turn-badge');
-    const nameEl = document.querySelector('.turn-player-name');
-    const phaseEl = document.querySelector('.turn-phase');
-    if (badge) badge.textContent = esMiTurno ? 'Tu turno' : 'Turno';
-    if (nameEl) nameEl.textContent = jugadorTurno?.nombre || '';
-    if (phaseEl) {
-        phaseEl.innerHTML = esMiTurno
-            ? `Fase: <strong>${fase === 'ROBO' ? 'ROBAR CARTA' : 'DESCARTAR CARTA'}</strong>`
-            : `<strong>Esperando a ${escapeHtml(jugadorTurno?.nombre || 'otro jugador')}…</strong>`;
+    const root = document.querySelector('.game-container');
+    if (root) {
+        root.classList.toggle('my-turn', !!esMiTurno && !gameState.juegoTerminado);
+        root.classList.toggle('their-turn', !esMiTurno && !gameState.juegoTerminado);
+        root.dataset.fase = fase || '';
+    }
+
+    const dash = document.querySelector('.player-dashboard');
+    if (dash) {
+        dash.classList.toggle('is-active-turn', !!esMiTurno && !gameState.juegoTerminado);
+        dash.classList.toggle('is-waiting', !esMiTurno || !!gameState.juegoTerminado);
     }
 
     const actions = document.querySelector('.player-actions');
     if (actions) actions.classList.toggle('actions-locked', !puedeInteractuar);
 
-    const playersList = document.querySelector('.players-list');
-    if (playersList) {
-        playersList.innerHTML = gameState.jugadores.map(jugador => `
-            <div class="player-item ${jugador.id === gameState.turnoActual ? 'active' : ''}">
-                <div class="player-name-wrapper">
-                    <span class="player-item-name">${escapeHtml(jugador.nombre)}${jugador.esYo ? ' (tú)' : ''}</span>
+    const opponentsRow = document.getElementById('opponentsRow');
+    if (opponentsRow) {
+        opponentsRow.innerHTML = gameState.jugadores
+            .filter(j => !j.esYo)
+            .map(jugador => `
+                <div class="opponent-chip ${jugador.id === gameState.turnoActual ? 'is-turn' : ''}">
+                    <span class="opponent-chip-name">${escapeHtml(jugador.nombre)}</span>
+                    <span class="opponent-chip-count">${jugador.cartasCount}</span>
                 </div>
-                <span class="player-cards-count">${jugador.cartasCount} cartas</span>
-            </div>
-        `).join('');
+            `).join('');
     }
 
     const historyList = document.querySelector('.history-list');
@@ -367,12 +367,8 @@ function actualizarTableroSinMano() {
         `).reverse().join('');
     }
 
-    const deckPileEl = document.getElementById('deckPile');
-    if (deckPileEl) {
-        const parent = deckPileEl.parentElement;
-        const countLabel = parent?.querySelector('.text-muted');
-        if (countLabel) countLabel.textContent = `Quedan: ${gameState.mazoRoboCount}`;
-    }
+    const deckCount = document.getElementById('deckCount');
+    if (deckCount) deckCount.textContent = String(gameState.mazoRoboCount ?? '');
 
     const discardPileEl = document.getElementById('discardPile');
     if (discardPileEl) {
@@ -398,7 +394,7 @@ function actualizarTableroSinMano() {
                 </div>
             `).join('');
         } else {
-            meldsContainerEl.innerHTML = `<span class="text-muted" style="font-size: 0.9rem;">No hay grupos expuestos en la mesa aún.</span>`;
+            meldsContainerEl.innerHTML = '';
         }
     }
 
@@ -1257,88 +1253,72 @@ function renderBoard() {
 
     const fase = gameState.faseActual;
     const esMiTurno = gameState.esMiTurno;
-    const jugadorTurno = gameState.jugadores.find(j => j.id === gameState.turnoActual);
-    const yo = gameState.jugadores.find(j => j.esYo);
-    const mano = yo?.mano || [];
+    const rivales = gameState.jugadores.filter(j => !j.esYo);
 
     const puedeInteractuar = esMiTurno && !gameState.juegoTerminado;
 
     appEl.innerHTML = `
-        <div class="game-container">
+        <div class="game-container ${esMiTurno && !gameState.juegoTerminado ? 'my-turn' : 'their-turn'}" data-fase="${escapeAttr(fase || '')}">
             <div id="actionToast" class="action-toast"></div>
-            <div class="board-area">
-                <div class="turn-banner">
-                    <div class="turn-player-info">
-                        <span class="turn-badge">${esMiTurno ? 'Tu turno' : 'Turno'}</span>
-                        <span class="turn-player-name">${escapeHtml(jugadorTurno?.nombre || '')}</span>
-                    </div>
-                    <div class="turn-phase">
-                        ${esMiTurno
-                            ? `Fase: <strong>${fase === 'ROBO' ? 'ROBAR CARTA' : 'DESCARTAR CARTA'}</strong>`
-                            : `<strong>Esperando a ${escapeHtml(jugadorTurno?.nombre || 'otro jugador')}…</strong>`
-                        }
-                    </div>
-                    <button type="button" id="btnDownloadReportLive" class="btn-report-live" title="Descargar estado actual de la partida">
-                        Descargar estado
-                    </button>
+
+            <header class="game-topbar">
+                ${roomState ? `<div class="room-chip">Sala <strong>${escapeHtml(roomState.code)}</strong></div>` : '<div></div>'}
+                <div class="game-topbar-actions">
+                    <button type="button" id="btnToggleHistory" class="game-icon-btn" aria-expanded="false" title="Historial">Historial</button>
+                    <button type="button" id="btnDownloadReportLive" class="game-icon-btn" title="Descargar estado">Estado</button>
                 </div>
-                <p id="reportStatus" class="report-status-live text-muted" hidden></p>
+            </header>
+            <p id="reportStatus" class="report-status-live text-muted" hidden></p>
 
-                ${roomState ? `<div class="room-chip">Sala <strong>${escapeHtml(roomState.code)}</strong></div>` : ''}
+            <div id="opponentsRow" class="opponents-row">
+                ${rivales.map(jugador => `
+                    <div class="opponent-chip ${jugador.id === gameState.turnoActual ? 'is-turn' : ''}">
+                        <span class="opponent-chip-name">${escapeHtml(jugador.nombre)}</span>
+                        <span class="opponent-chip-count">${jugador.cartasCount}</span>
+                    </div>
+                `).join('')}
+            </div>
 
+            <div class="table-zone">
                 <div class="pile-zone">
                     <div class="pile-container">
-                        <span class="pile-label">Mazo de Robo</span>
+                        <span class="pile-label">Robo</span>
                         <div id="deckPile" class="card card-back ${puedeRobarDeMazo() ? 'interactive-card deck-draggable' : ''}"></div>
-                        <span class="text-muted" style="font-size: 0.8rem;">Quedan: ${gameState.mazoRoboCount}</span>
+                        <span id="deckCount" class="pile-count">${gameState.mazoRoboCount}</span>
                     </div>
                     <div class="pile-container">
-                        <span class="pile-label">Mazo de Descarte</span>
+                        <span class="pile-label">Descarte</span>
                         <div id="discardPile"></div>
                     </div>
                 </div>
-
                 <div class="table-melds-section">
-                    <h3 class="section-title">Grupos Expuestos en Mesa</h3>
+                    <span class="melds-label">Mesa</span>
                     <div id="meldsContainer" class="melds-container"></div>
                 </div>
-
-                <div class="player-dashboard">
-                    <div class="dashboard-header">
-                        <h2 class="dashboard-title">Tus Cartas (${escapeHtml(yo?.nombre || '')})</h2>
-                        <div class="player-actions ${puedeInteractuar ? '' : 'actions-locked'}">
-                            <button id="btnRobarDescarte" class="btn-success" style="display: none;">Robar Descarte</button>
-                            <button id="btnDescartar" class="btn-primary" disabled>Descartar Selección</button>
-                            <button id="btnCantarPuntos" class="btn-secondary">Cantar por Puntos</button>
-                        </div>
-                    </div>
-                    <div id="handCards" class="hand-cards-container"></div>
-                </div>
             </div>
 
-            <div class="sidebar-area">
-                <div class="panel">
-                    <h3 class="panel-title">Jugadores</h3>
-                    <div class="players-list">
-                        ${gameState.jugadores.map(jugador => `
-                            <div class="player-item ${jugador.id === gameState.turnoActual ? 'active' : ''}">
-                                <div class="player-name-wrapper">
-                                    <span class="player-item-name">${escapeHtml(jugador.nombre)}${jugador.esYo ? ' (tú)' : ''}</span>
-                                </div>
-                                <span class="player-cards-count">${jugador.cartasCount} cartas</span>
-                            </div>
-                        `).join('')}
+            <div class="player-dashboard ${esMiTurno && !gameState.juegoTerminado ? 'is-active-turn' : 'is-waiting'}">
+                <div class="dashboard-header">
+                    <div class="player-actions ${puedeInteractuar ? '' : 'actions-locked'}">
+                        <button id="btnRobarDescarte" class="btn-success" style="display: none;">Robar descarte</button>
+                        <button id="btnDescartar" class="btn-primary" disabled>Descartar</button>
+                        <button id="btnCantarPuntos" class="btn-secondary">Cantar</button>
                     </div>
                 </div>
-                <div class="panel">
-                    <h3 class="panel-title">Historial</h3>
-                    <div class="history-list">
-                        ${gameState.historial.map(item => `
-                            <div class="history-item">${escapeHtml(item.mensaje)}</div>
-                        `).reverse().join('')}
-                    </div>
-                </div>
+                <div id="handCards" class="hand-cards-container"></div>
             </div>
+
+            <aside id="historyDrawer" class="history-drawer" hidden>
+                <div class="history-drawer-head">
+                    <strong>Historial</strong>
+                    <button type="button" id="btnCloseHistory" class="game-icon-btn">Cerrar</button>
+                </div>
+                <div class="history-list">
+                    ${gameState.historial.map(item => `
+                        <div class="history-item">${escapeHtml(item.mensaje)}</div>
+                    `).reverse().join('')}
+                </div>
+            </aside>
         </div>
     `;
 
@@ -1390,7 +1370,7 @@ function renderBoard() {
             </div>
         `).join('');
     } else {
-        meldsContainerEl.innerHTML = `<span class="text-muted" style="font-size: 0.9rem;">No hay grupos expuestos en la mesa aún.</span>`;
+        meldsContainerEl.innerHTML = '';
     }
 
     // Mano: siempre se puede reordenar; acciones de juego solo en tu turno
@@ -1421,6 +1401,23 @@ function renderBoard() {
             descargarInformePartida();
         });
     }
+
+    const historyDrawer = document.getElementById('historyDrawer');
+    const btnToggleHistory = document.getElementById('btnToggleHistory');
+    const btnCloseHistory = document.getElementById('btnCloseHistory');
+    const setHistoryOpen = (open) => {
+        if (!historyDrawer || !btnToggleHistory) return;
+        historyDrawer.hidden = !open;
+        btnToggleHistory.setAttribute('aria-expanded', open ? 'true' : 'false');
+    };
+    btnToggleHistory?.addEventListener('click', () => {
+        playSound('click');
+        setHistoryOpen(!!historyDrawer?.hidden);
+    });
+    btnCloseHistory?.addEventListener('click', () => {
+        playSound('click');
+        setHistoryOpen(false);
+    });
 
     actualizarEstadoBotones(puedeInteractuar);
 }
