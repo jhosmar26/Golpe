@@ -556,6 +556,12 @@ export function aplicarEscenarioCustom(game, config = {}) {
         const rivalGruposMesa = [...rivalGruposMesaTxt, ...rivalSplit.gruposMesa];
 
 
+        const cartasEnMesa = (grupos) => grupos.reduce((n, g) => n + g.length, 0);
+        const miMesaCount = cartasEnMesa(miGruposMesa);
+        const rivalMesaCount = cartasEnMesa(rivalGruposMesa);
+        const miTotal = () => miMano.length + miMesaCount;
+        const rivalTotal = () => rivalMano.length + rivalMesaCount;
+
         // Reservar descarte y próximas ANTES del relleno aleatorio
         // (si no, takeRandom puede consumir la carta pedida para el descarte).
         let descarteTop = descarteSlot
@@ -577,29 +583,43 @@ export function aplicarEscenarioCustom(game, config = {}) {
             return picked;
         };
 
-        if (miMano.length > 8 || rivalMano.length > 8) {
-            throw new Error('Ninguna mano puede tener más de 8 cartas.');
+        // Las cartas en mesa cuentan en el cupo total (mano + mesa ≤ 8).
+        if (miTotal() > 8 || rivalTotal() > 8) {
+            throw new Error('Ningún jugador puede tener más de 8 cartas entre mano y mesa.');
         }
-        if (miMano.length === 8 && rivalMano.length === 8) {
-            throw new Error('Solo uno puede tener 8 cartas: si el rival ya tiene 8, vos máximo 7 (y viceversa).');
+        if (miTotal() === 8 && rivalTotal() === 8) {
+            throw new Error('Solo uno puede tener 8 cartas en total (mano+mesa).');
         }
 
-        // Completar a 8+7 (quién tiene 8 = el que ya llegó a 8, o vos por defecto)
-        if (miMano.length === 0 && rivalMano.length === 0) {
+        /**
+         * Completa la mano hasta que mano+mesa = target.
+         * Con grupos en mesa el cupo es 7 (partida en curso): p.ej. 3 en mesa → 4 en mano.
+         */
+        const padManoHastaTotal = (mano, mesaCount, target) => {
+            const need = target - mesaCount - mano.length;
+            if (need <= 0) return mano;
+            return mano.concat(takeRandom(need));
+        };
+
+        const hayMesa = miMesaCount > 0 || rivalMesaCount > 0;
+
+        if (miTotal() === 0 && rivalTotal() === 0) {
             miMano = takeRandom(8);
             rivalMano = takeRandom(7);
-        } else if (miMano.length === 8) {
-            const needRival = 7 - rivalMano.length;
-            if (needRival > 0) rivalMano = rivalMano.concat(takeRandom(needRival));
-            else if (rivalMano.length === 0) rivalMano = takeRandom(7);
-        } else if (rivalMano.length === 8) {
-            const needMi = 7 - miMano.length;
-            if (needMi > 0) miMano = miMano.concat(takeRandom(needMi));
-            else if (miMano.length === 0) miMano = takeRandom(7);
+        } else if (hayMesa) {
+            // Custom con grupos bajados = mitad de partida: ambos a total 7
+            if (miTotal() > 7 || rivalTotal() > 7) {
+                throw new Error('Con grupos en mesa el total (mano+mesa) no puede superar 7 por jugador.');
+            }
+            miMano = padManoHastaTotal(miMano, miMesaCount, 7);
+            rivalMano = padManoHastaTotal(rivalMano, rivalMesaCount, 7);
+        } else if (miTotal() === 8) {
+            rivalMano = padManoHastaTotal(rivalMano, rivalMesaCount, 7);
+        } else if (rivalTotal() === 8) {
+            miMano = padManoHastaTotal(miMano, miMesaCount, 7);
         } else {
-            if (miMano.length < 8) miMano = miMano.concat(takeRandom(8 - miMano.length));
-            if (rivalMano.length < 7) rivalMano = rivalMano.concat(takeRandom(7 - rivalMano.length));
-            else if (rivalMano.length === 0) rivalMano = takeRandom(7);
+            miMano = padManoHastaTotal(miMano, miMesaCount, 8);
+            rivalMano = padManoHastaTotal(rivalMano, rivalMesaCount, 7);
         }
 
         if (!descarteTop) {
@@ -636,10 +656,19 @@ export function aplicarEscenarioCustom(game, config = {}) {
 
         game.mazoDescarte = descarteTop ? [descarteTop] : [];
 
-        if (yo.mano.length === 8) {
+        const yoTotal = yo.mano.length + cartasEnMesa(yo.gruposExpuestos);
+        const rivalTotalFinal = rival.mano.length + cartasEnMesa(rival.gruposExpuestos);
+        const partidaConMesa = cartasEnMesa(yo.gruposExpuestos) > 0
+            || cartasEnMesa(rival.gruposExpuestos) > 0;
+
+        if (partidaConMesa) {
+            // Mitad de partida: se puede robar/descartar con total 7
+            game.turnoActual = 0;
+            game.faseActual = 'ROBO';
+        } else if (yoTotal === 8) {
             game.turnoActual = 0;
             game.faseActual = 'DESCARTE';
-        } else if (rival.mano.length === 8) {
+        } else if (rivalTotalFinal === 8) {
             game.turnoActual = 1;
             game.faseActual = 'DESCARTE';
         } else {

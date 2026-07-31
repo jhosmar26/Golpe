@@ -28,6 +28,9 @@ let renderDiferidoPorDrag = false;
 
 let cartasSeleccionadasIds = [];
 let ignorarClickTrasDrag = false;
+/** Carta recién robada del mazo: resalta en dorado ≤2s */
+let cartaRobadaHighlightId = null;
+let cartaRobadaHighlightTimer = null;
 let lastError = '';
 
 // DnD
@@ -122,6 +125,7 @@ socket.on('gameState', (state) => {
     if (!state) {
         prevGameSnapshot = null;
         cancelarInteraccionPointer();
+        limpiarCartaRobadaHighlight();
         renderDiferidoPorDrag = false;
         if (roomState && roomState.status === 'lobby') {
             screen = 'room';
@@ -135,6 +139,7 @@ socket.on('gameState', (state) => {
     cartasSeleccionadasIds = cartasSeleccionadasIds.filter(id => idsMano.has(id));
 
     processGameSounds(prev, state);
+    detectarYMarcarCartaRobadaDelMazo(prev, state);
 
     if (state.juegoTerminado) {
         cancelarInteraccionPointer();
@@ -264,6 +269,56 @@ function playHistorialSounds(historial, fromIndex, { skipTurn }) {
         }
     }
     return playedAction;
+}
+
+/** Si vos acabás de robar del mazo, marca esa carta en dorado ≤2s. */
+function detectarYMarcarCartaRobadaDelMazo(prev, next) {
+    if (!prev || !next) return;
+    const yoPrev = prev.jugadores?.find(j => j.esYo);
+    const yoNext = next.jugadores?.find(j => j.esYo);
+    if (!yoPrev?.mano || !yoNext?.mano) return;
+
+    const prevIds = new Set(yoPrev.mano.map(c => String(c.id)));
+    const nuevas = yoNext.mano.filter(c => !prevIds.has(String(c.id)));
+    if (nuevas.length !== 1) return;
+
+    const histPrevLen = Array.isArray(prev.historial) ? prev.historial.length : 0;
+    const mensajesNuevos = (next.historial || []).slice(histPrevLen).map(h => String(h?.mensaje || ''));
+    const huboRoboMazo = mensajesNuevos.some(msg =>
+        msg.includes('robó una carta del mazo') && msg.includes(yoNext.nombre)
+    );
+    const fallbackRobo =
+        !huboRoboMazo
+        && prev.faseActual === 'ROBO'
+        && next.faseActual === 'DESCARTE'
+        && next.esMiTurno
+        && yoNext.mano.length === yoPrev.mano.length + 1;
+
+    if (!huboRoboMazo && !fallbackRobo) return;
+    marcarCartaRobadaHighlight(nuevas[0].id);
+}
+
+function marcarCartaRobadaHighlight(cardId) {
+    if (cartaRobadaHighlightTimer) {
+        window.clearTimeout(cartaRobadaHighlightTimer);
+        cartaRobadaHighlightTimer = null;
+    }
+    cartaRobadaHighlightId = String(cardId);
+    cartaRobadaHighlightTimer = window.setTimeout(() => {
+        cartaRobadaHighlightId = null;
+        cartaRobadaHighlightTimer = null;
+        document.querySelectorAll('.card.just-drawn-from-deck').forEach((el) => {
+            el.classList.remove('just-drawn-from-deck');
+        });
+    }, 2000);
+}
+
+function limpiarCartaRobadaHighlight() {
+    if (cartaRobadaHighlightTimer) {
+        window.clearTimeout(cartaRobadaHighlightTimer);
+        cartaRobadaHighlightTimer = null;
+    }
+    cartaRobadaHighlightId = null;
 }
 
 function startVictoryTransition() {
@@ -418,6 +473,7 @@ function limpiarFantasmaDragHuerfano() {
     document.querySelectorAll('.card-drag-ghost').forEach(el => el.remove());
     document.body.classList.remove('is-reordering-cards', 'is-drawing-from-deck');
     document.getElementById('handCards')?.classList.remove('hand-drop-hover');
+    setDiscardDragIntent(false);
 }
 
 /** Cancela drag de mano o mazo y limpia el DOM asociado. */
@@ -1434,7 +1490,9 @@ function renderManoLocal(opts = {}) {
         const isSelected = cartasSeleccionadasIds.includes(card.id);
         // Interactivas si se puede seleccionar O reordenar (feedback visual)
         const interactive = !!(puedeSeleccionar || puedeReordenar);
-        return renderCardHtml(card, interactive, isSelected && !!puedeSeleccionar);
+        const justDrawn = cartaRobadaHighlightId != null
+            && String(card.id) === String(cartaRobadaHighlightId);
+        return renderCardHtml(card, interactive, isSelected && !!puedeSeleccionar, justDrawn);
     }).join('');
 
     if (puedeSeleccionar) {
@@ -1528,11 +1586,12 @@ function solicitarRoboDescarte(topCard) {
     alert(`Para robar ${topCard.label}${topCard.suitLabel}, selecciona ≥2 cartas de tu mano que formen un grupo válido con ella. Luego usa el botón verde.`);
 }
 
-function renderCardHtml(card, interactive = false, selected = false) {
+function renderCardHtml(card, interactive = false, selected = false, justDrawn = false) {
     const classInteractive = interactive ? 'interactive-card' : '';
     const classSelected = selected ? 'selected' : '';
+    const classDrawn = justDrawn ? 'just-drawn-from-deck' : '';
     return `
-        <div class="card ${card.color} ${classInteractive} ${classSelected}" data-id="${card.id}">
+        <div class="card ${card.color} ${classInteractive} ${classSelected} ${classDrawn}" data-id="${card.id}">
             <div class="card-top">
                 <span class="card-value">${card.label}</span>
                 <span class="card-suit-mini">${card.suitLabel}</span>
@@ -1954,11 +2013,42 @@ function cancelarDragMano() {
     } catch (_) {}
     if (pointerDrag.ghost) pointerDrag.ghost.remove();
     document.body.classList.remove('is-reordering-cards');
+    setDiscardDragIntent(false);
     limpiarPreviewReorden();
     pointerDrag = null;
     cartaArrastradaId = null;
     indiceOrigenDrag = null;
     indiceDestinoPreview = null;
+}
+
+/** Fase Descarte en tu turno: soltar fuera del panel de mano = descartar. */
+function puedeDescartarPorDrag() {
+    return !!(
+        gameState
+        && gameState.esMiTurno
+        && !gameState.juegoTerminado
+        && gameState.faseActual === 'DESCARTE'
+    );
+}
+
+/** True si el rectángulo de la carta está completamente fuera del panel morado. */
+function cartaCompletamenteFueraDelDashboard(ghostEl) {
+    const dash = document.querySelector('.player-dashboard');
+    if (!dash || !ghostEl) return false;
+    const cardRect = ghostEl.getBoundingClientRect();
+    const dashRect = dash.getBoundingClientRect();
+    return (
+        cardRect.right < dashRect.left
+        || cardRect.left > dashRect.right
+        || cardRect.bottom < dashRect.top
+        || cardRect.top > dashRect.bottom
+    );
+}
+
+function setDiscardDragIntent(activo) {
+    const game = document.querySelector('.game-container');
+    game?.classList.toggle('discard-drag-intent', !!activo);
+    pointerDrag?.ghost?.classList.toggle('discard-intent-ghost', !!activo);
 }
 
 function onCardPointerDown(e) {
@@ -2002,6 +2092,19 @@ function onCardPointerMove(e) {
     if (pointerDrag.ghost) {
         pointerDrag.ghost.style.left = `${e.clientX}px`;
         pointerDrag.ghost.style.top = `${e.clientY}px`;
+    }
+
+    const fueraParaDescartar = puedeDescartarPorDrag()
+        && cartaCompletamenteFueraDelDashboard(pointerDrag.ghost);
+    setDiscardDragIntent(fueraParaDescartar);
+
+    if (fueraParaDescartar) {
+        // Fuera del panel: no reordenar, solo señal de descarte
+        if (indiceDestinoPreview !== indiceOrigenDrag) {
+            indiceDestinoPreview = indiceOrigenDrag;
+            limpiarSoloPreviewShift();
+        }
+        return;
     }
 
     const destIdx = indiceDestinoDesdePunto(e.clientX, e.clientY);
@@ -2116,6 +2219,10 @@ function onCardPointerUp(e) {
 
     const card = pointerDrag.card;
     const wasDragging = pointerDrag.dragging;
+    const cardId = pointerDrag.id;
+    const descartarAlSoltar = wasDragging
+        && puedeDescartarPorDrag()
+        && cartaCompletamenteFueraDelDashboard(pointerDrag.ghost);
 
     card.removeEventListener('pointermove', onCardPointerMove);
     card.removeEventListener('pointerup', onCardPointerUp);
@@ -2127,18 +2234,25 @@ function onCardPointerUp(e) {
         pointerDrag.ghost = null;
     }
     document.body.classList.remove('is-reordering-cards');
+    setDiscardDragIntent(false);
 
     if (wasDragging) {
-        // Recalcular destino en el punto final (evita quedar con el vecino si volviste al sitio)
-        const finalIdx = indiceDestinoDesdePunto(e.clientX, e.clientY);
-        if (finalIdx != null) indiceDestinoPreview = finalIdx;
-
-        if (indiceDestinoPreview === indiceOrigenDrag) {
+        if (descartarAlSoltar) {
             limpiarPreviewReorden();
-        } else if (!reordenYaAplicado) {
-            confirmarReordenMano();
+            cartasSeleccionadasIds = [];
+            enviarAccion('DESCARTAR', { cartaId: cardId });
+        } else {
+            // Recalcular destino en el punto final (evita quedar con el vecino si volviste al sitio)
+            const finalIdx = indiceDestinoDesdePunto(e.clientX, e.clientY);
+            if (finalIdx != null) indiceDestinoPreview = finalIdx;
+
+            if (indiceDestinoPreview === indiceOrigenDrag) {
+                limpiarPreviewReorden();
+            } else if (!reordenYaAplicado) {
+                confirmarReordenMano();
+            }
+            if (!reordenYaAplicado) limpiarPreviewReorden();
         }
-        if (!reordenYaAplicado) limpiarPreviewReorden();
 
         ignorarClickTrasDrag = true;
         window.setTimeout(() => { ignorarClickTrasDrag = false; }, 80);

@@ -149,7 +149,36 @@ describe('custom debug', () => {
         assert.equal(yo.gruposExpuestos[0].length, 3);
         assert.ok(yo.gruposExpuestos[0].every(c => c.value === 5));
         assert.equal(yo.tuvoRoboDescarte, true);
-        assert.equal(yo.mano.length, 8);
+        // Mitad de partida: 3 en mesa + 4 en mano = 7
+        assert.equal(yo.mano.length, 4);
+        assert.equal(yo.mano.length + yo.gruposExpuestos.flat().length, 7);
+        assert.equal(game.jugadores[1].mano.length, 7);
+        assert.equal(game.faseActual, 'ROBO');
+        assert.equal(game.turnoActual, 0);
+    });
+
+    it('rival con trío en mesa queda con 4 en mano (total 7)', () => {
+        const game = new GolpeadoGame();
+        game.inicializarJuego(['Yo', 'Bot']);
+        const rivalSlots = [
+            { suit: 'H', value: 9 },
+            { suit: 'D', value: 9 },
+            { suit: 'C', value: 9 }
+        ];
+        const detected = detectarGruposEnSlots(rivalSlots).map(g => ({ ...g, lugar: 'mesa' }));
+        const res = aplicarEscenarioCustom(game, {
+            miManoSlots: [{ suit: 'S', value: 2 }],
+            rivalManoSlots: rivalSlots,
+            rivalGruposDetectados: detected,
+            descarteTop: 'S13'
+        });
+        assert.equal(res.ok, true, res.error);
+        const rival = game.jugadores[1];
+        assert.equal(rival.gruposExpuestos.flat().length, 3);
+        assert.equal(rival.mano.length, 4);
+        assert.equal(rival.mano.length + rival.gruposExpuestos.flat().length, 7);
+        assert.equal(game.jugadores[0].mano.length, 7);
+        assert.equal(game.faseActual, 'ROBO');
     });
 
     it('no agrupa tres cartas del mismo valor con el mismo palo', () => {

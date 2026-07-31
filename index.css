@@ -1027,6 +1027,29 @@ body:has(.game-container) {
     z-index: 2;
 }
 
+.hand-cards-container .card.just-drawn-from-deck {
+    z-index: 3;
+    animation: just-drawn-gold-blink 0.4s ease-in-out 5;
+    box-shadow:
+        0 0 0 2px rgba(255, 196, 64, 0.9),
+        0 0 14px rgba(255, 200, 70, 0.55);
+}
+
+@keyframes just-drawn-gold-blink {
+    0%, 100% {
+        box-shadow:
+            0 0 0 2px rgba(255, 196, 64, 0.95),
+            0 0 10px rgba(255, 200, 70, 0.4);
+        filter: brightness(1.06);
+    }
+    50% {
+        box-shadow:
+            0 0 0 3px rgba(255, 214, 90, 1),
+            0 0 18px rgba(255, 210, 80, 0.75);
+        filter: brightness(1.18);
+    }
+}
+
 .hand-cards-container:has(.is-dragging) .interactive-card:hover {
     transform: none;
     box-shadow: var(--shadow-md);
@@ -1610,6 +1633,39 @@ body:has(.game-container) {
     transform: translate(-50%, -60%) rotate(4deg) scale(1.05);
     box-shadow: var(--shadow-lg);
     opacity: 0.95;
+}
+
+.card-drag-ghost.discard-intent-ghost {
+    box-shadow: 0 0 0 1px rgba(220, 60, 60, 0.35), var(--shadow-lg);
+}
+
+/* Tinte rojo fijo al sacar una carta del panel para descartar */
+.game-container.discard-drag-intent::after {
+    content: '';
+    position: fixed;
+    inset: 0;
+    z-index: 9000;
+    pointer-events: none;
+    background: rgba(200, 45, 45, 0.045);
+}
+
+.game-container.discard-drag-intent::before {
+    content: 'Descartar';
+    position: fixed;
+    top: 42%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    z-index: 9001;
+    pointer-events: none;
+    padding: 0.65rem 1.35rem;
+    border-radius: 12px;
+    background: rgba(40, 18, 22, 0.82);
+    border: 1px solid rgba(220, 70, 70, 0.45);
+    color: rgba(255, 210, 210, 0.95);
+    font-size: 1.05rem;
+    font-weight: 650;
+    letter-spacing: 0.04em;
+    box-shadow: 0 8px 28px rgba(0, 0, 0, 0.35);
 }
 
 body.is-reordering-cards {
