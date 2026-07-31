@@ -23,6 +23,10 @@ let gameState = null;
 /** @type {object|null} Snapshot previo para detectar eventos de sonido */
 let prevGameSnapshot = null;
 let victoriaTransitionPending = false;
+/** Muestra la mesa con las cartas ganadoras antes de la pantalla final. */
+let victoriaRevealActive = false;
+let victoriaRevealTimer = null;
+const VICTORY_REVEAL_MS = 3800;
 /** Evita re-render completo a mitad de un drag (deja el fantasma “pegado”). */
 let renderDiferidoPorDrag = false;
 
@@ -81,17 +85,147 @@ function enviarAccion(type, payload = {}) {
     });
 }
 
+const SESSION_ID_KEY = 'golpeadoSessionId';
+const ROOM_CODE_KEY = 'golpeadoRoomCode';
+
+function getClientSessionId() {
+    try {
+        let id = localStorage.getItem(SESSION_ID_KEY);
+        if (!id || id.length < 8) {
+            id = (crypto.randomUUID && crypto.randomUUID())
+                || `s-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+            localStorage.setItem(SESSION_ID_KEY, id);
+        }
+        return id;
+    } catch (_) {
+        return `s-${Date.now().toString(36)}`;
+    }
+}
+
+function recordarSala(code) {
+    try {
+        if (code) localStorage.setItem(ROOM_CODE_KEY, String(code));
+    } catch (_) {}
+}
+
+function olvidarSala() {
+    try {
+        localStorage.removeItem(ROOM_CODE_KEY);
+    } catch (_) {}
+}
+
+/** Sale de la partida y vuelve al inicio (partida desde cero). */
+function salirAlLobbyInicial() {
+    cancelarVictoryReveal();
+    victoriaTransitionPending = false;
+    cancelarInteraccionPointer();
+    limpiarCartaRobadaHighlight();
+    renderDiferidoPorDrag = false;
+    cartasSeleccionadasIds = [];
+    prevGameSnapshot = null;
+    olvidarSala();
+    socket.emit('leaveRoom');
+    gameState = null;
+    roomState = null;
+    screen = 'home';
+    render();
+}
+
+function confirmarSalirDePartida() {
+    const ok = window.confirm('¿Seguro que querés salir de esta partida?');
+    if (!ok) return;
+    playSound('click');
+    salirAlLobbyInicial();
+}
+
+function persistirSesionDesdeRoom(state) {
+    if (!state?.code) return;
+    recordarSala(state.code);
+    const yo = state.players?.find(p => p.esYo);
+    if (yo?.sessionId) {
+        try {
+            localStorage.setItem(SESSION_ID_KEY, String(yo.sessionId));
+        } catch (_) {}
+    }
+}
+
+function intentarReclamarSesion() {
+    let roomCode = null;
+    try {
+        roomCode = localStorage.getItem(ROOM_CODE_KEY);
+    } catch (_) {}
+    const sessionId = getClientSessionId();
+    if (!roomCode || !sessionId || !socket.connected) return;
+
+    socket.emit('reclaimSession', { roomCode, sessionId }, (res) => {
+        if (res?.ok) {
+            if (res.room) persistirSesionDesdeRoom(res.room);
+            return;
+        }
+        // Solo limpiar si teníamos UI de partida colgada
+        olvidarSala();
+        if (screen === 'game' || screen === 'victory' || screen === 'room') {
+            roomState = null;
+            gameState = null;
+            screen = 'home';
+            lastError = res?.error || 'Se perdió la conexión con la partida.';
+            render();
+            const toast = document.getElementById('actionToast');
+            if (toast) {
+                toast.textContent = lastError;
+                toast.classList.add('visible');
+                window.setTimeout(() => toast.classList.remove('visible'), 2800);
+            }
+        }
+    });
+}
+
+function limpiarEstadoTrasBackground() {
+    cancelarInteraccionPointer();
+    renderDiferidoPorDrag = false;
+    animandoFlip = false;
+    setDiscardDragIntent(false);
+    document.body.classList.remove('is-reordering-cards', 'is-drawing-from-deck');
+}
+
 // ==========================================
 // SOCKET
 // ==========================================
 
 socket.on('connect', () => {
     console.log('[Socket] conectado', socket.id);
+    intentarReclamarSesion();
+});
+
+socket.on('disconnect', () => {
+    limpiarEstadoTrasBackground();
+});
+
+document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') {
+        limpiarEstadoTrasBackground();
+        return;
+    }
+    limpiarEstadoTrasBackground();
+    if (socket.connected) {
+        intentarReclamarSesion();
+        if (gameState && screen === 'game' && !pointerDrag && !animandoFlip) {
+            render();
+        }
+    }
+});
+
+window.addEventListener('pageshow', (e) => {
+    limpiarEstadoTrasBackground();
+    if (e.persisted || document.visibilityState === 'visible') {
+        if (socket.connected) intentarReclamarSesion();
+    }
 });
 
 socket.on('roomState', (state) => {
     roomState = state;
     if (!state) {
+        olvidarSala();
         if (screen !== 'home') {
             screen = 'home';
             gameState = null;
@@ -99,6 +233,7 @@ socket.on('roomState', (state) => {
         }
         return;
     }
+    persistirSesionDesdeRoom(state);
     if (state.status === 'lobby') {
         screen = 'room';
         gameState = null;
@@ -126,6 +261,7 @@ socket.on('gameState', (state) => {
         prevGameSnapshot = null;
         cancelarInteraccionPointer();
         limpiarCartaRobadaHighlight();
+        cancelarVictoryReveal();
         renderDiferidoPorDrag = false;
         if (roomState && roomState.status === 'lobby') {
             screen = 'room';
@@ -144,15 +280,33 @@ socket.on('gameState', (state) => {
     if (state.juegoTerminado) {
         cancelarInteraccionPointer();
         renderDiferidoPorDrag = false;
-        if (screen !== 'victory' && !victoriaTransitionPending) {
-            startVictoryTransition();
+
+        if (screen === 'victory') {
+            render();
             return;
         }
+        if (victoriaTransitionPending) {
+            return;
+        }
+        if (victoriaRevealActive) {
+            screen = 'game';
+            render();
+            return;
+        }
+
+        // Solo revelar si la partida acaba de terminar ahora (no al cargar un debug ya cerrado)
+        const acabaDeTerminar = !!(prev && !prev.juegoTerminado);
+        if (acabaDeTerminar) {
+            startVictoryReveal();
+            return;
+        }
+
         screen = 'victory';
         render();
         return;
     }
 
+    cancelarVictoryReveal();
     victoriaTransitionPending = false;
     screen = 'game';
 
@@ -321,8 +475,87 @@ function limpiarCartaRobadaHighlight() {
     cartaRobadaHighlightId = null;
 }
 
+function idsCartasVictoriaGanador(state) {
+    const ids = new Set();
+    if (!state?.juegoTerminado) return ids;
+    const res = (state.resultadosVictoria || []).find(r => r.esGanador);
+    if (res) {
+        for (const g of res.gruposArmados || []) {
+            for (const c of g.cartas || []) {
+                if (c?.id != null) ids.add(String(c.id));
+            }
+        }
+    }
+    if (ids.size > 0) return ids;
+
+    const ganador = (state.jugadores || []).find(j => j.id === state.ganadorId);
+    for (const c of ganador?.mano || []) ids.add(String(c.id));
+    for (const g of ganador?.gruposExpuestos || []) {
+        for (const c of g) ids.add(String(c.id));
+    }
+    return ids;
+}
+
+function etiquetaVictoriaBreve(state) {
+    const tipo = state?.tipoVictoria;
+    if (tipo === 'COLOR') return 'Color';
+    if (tipo === 'POKER') return 'Póker';
+    if (tipo === 'CERO_MANO') return 'Cero en mano';
+    if (tipo === 'CERO_EXPUESTO') return 'Cero en mesa';
+    if (tipo === 'PUNTOS') return 'Por puntos';
+    return 'Victoria';
+}
+
+/** Grupos bajados de un jugador, listos para insertar cerca de su zona. */
+function renderPlayerMeldsHtml(player, opts = {}) {
+    const grupos = player?.gruposExpuestos || [];
+    if (!grupos.length) {
+        return `<div class="player-melds" data-player-melds="${escapeAttr(String(player?.id ?? ''))}"></div>`;
+    }
+    const winCardIds = opts.winCardIds instanceof Set ? opts.winCardIds : new Set();
+    const esGanador = !!opts.esGanador;
+    return `
+        <div class="player-melds" data-player-melds="${escapeAttr(String(player.id))}">
+            ${grupos.map(cartas => `
+                <div class="meld-group ${esGanador ? 'meld-win-shine' : ''}">
+                    <div class="meld-cards">
+                        ${cartas.map(card => renderCardHtml(
+                            card,
+                            false,
+                            false,
+                            false,
+                            esGanador && winCardIds.has(String(card.id))
+                        )).join('')}
+                    </div>
+                </div>
+            `).join('')}
+        </div>
+    `;
+}
+
+function cancelarVictoryReveal() {
+    if (victoriaRevealTimer) {
+        window.clearTimeout(victoriaRevealTimer);
+        victoriaRevealTimer = null;
+    }
+    victoriaRevealActive = false;
+}
+
+function startVictoryReveal() {
+    cancelarVictoryReveal();
+    victoriaRevealActive = true;
+    screen = 'game';
+    render();
+    victoriaRevealTimer = window.setTimeout(() => {
+        victoriaRevealTimer = null;
+        victoriaRevealActive = false;
+        startVictoryTransition();
+    }, VICTORY_REVEAL_MS);
+}
+
 function startVictoryTransition() {
     victoriaTransitionPending = true;
+    victoriaRevealActive = false;
     const current = appEl.querySelector('.game-container, .overlay-screen') || appEl.firstElementChild;
     if (!current) {
         screen = 'victory';
@@ -408,9 +641,12 @@ function actualizarTableroSinMano() {
         opponentsRow.innerHTML = gameState.jugadores
             .filter(j => !j.esYo)
             .map(jugador => `
-                <div class="opponent-chip ${jugador.id === gameState.turnoActual ? 'is-turn' : ''}">
-                    <span class="opponent-chip-name">${escapeHtml(jugador.nombre)}</span>
-                    <span class="opponent-chip-count">${jugador.cartasCount}</span>
+                <div class="opponent-block ${jugador.id === gameState.turnoActual ? 'is-turn-block' : ''}">
+                    <div class="opponent-chip ${jugador.id === gameState.turnoActual ? 'is-turn' : ''}">
+                        <span class="opponent-chip-name">${escapeHtml(jugador.nombre)}</span>
+                        <span class="opponent-chip-count">${jugador.cartasCount}</span>
+                    </div>
+                    ${renderPlayerMeldsHtml(jugador)}
                 </div>
             `).join('');
     }
@@ -434,22 +670,14 @@ function actualizarTableroSinMano() {
         }
     }
 
-    const meldsContainerEl = document.getElementById('meldsContainer');
-    if (meldsContainerEl) {
-        const todosGrupos = gameState.jugadores.reduce((all, player) => {
-            return all.concat((player.gruposExpuestos || []).map(g => ({ cartas: g, owner: player.nombre })));
-        }, []);
-        if (todosGrupos.length > 0) {
-            meldsContainerEl.innerHTML = todosGrupos.map(group => `
-                <div class="meld-group">
-                    <span class="meld-owner">${escapeHtml(group.owner)}</span>
-                    <div class="meld-cards">
-                        ${group.cartas.map(card => renderCardHtml(card, false)).join('')}
-                    </div>
-                </div>
-            `).join('');
-        } else {
-            meldsContainerEl.innerHTML = '';
+    const yo = gameState.jugadores.find(j => j.esYo);
+    if (yo) {
+        const mySlot = document.querySelector(`[data-player-melds="${CSS.escape(String(yo.id))}"]`);
+        if (mySlot) {
+            const tmp = document.createElement('div');
+            tmp.innerHTML = renderPlayerMeldsHtml(yo).trim();
+            const next = tmp.firstElementChild;
+            if (next) mySlot.replaceWith(next);
         }
     }
 
@@ -560,7 +788,7 @@ function renderHome() {
         playSound('click');
         const nombre = document.getElementById('playerName').value.trim() || 'Jugador';
         showError('');
-        socket.emit('playVsBots', { nombre, numBots: 1 }, (res) => {
+        socket.emit('playVsBots', { nombre, numBots: 1, sessionId: getClientSessionId() }, (res) => {
             if (!res?.ok) showError(res?.error || 'No se pudo iniciar vs bots');
         });
     });
@@ -580,7 +808,7 @@ function renderHome() {
                 return;
             }
 
-            socket.emit('playDebugScenario', { nombre, scenarioId }, (res) => {
+            socket.emit('playDebugScenario', { nombre, scenarioId, sessionId: getClientSessionId() }, (res) => {
                 if (!res?.ok) showError(res?.error || 'No se pudo cargar el escenario');
             });
         });
@@ -590,7 +818,7 @@ function renderHome() {
         playSound('click');
         const nombre = document.getElementById('playerName').value.trim() || 'Anfitrión';
         showError('');
-        socket.emit('createRoom', { nombre }, (res) => {
+        socket.emit('createRoom', { nombre, sessionId: getClientSessionId() }, (res) => {
             if (!res?.ok) showError(res?.error || 'No se pudo crear la sala');
         });
     });
@@ -604,7 +832,7 @@ function renderHome() {
             return;
         }
         showError('');
-        socket.emit('joinRoom', { code, nombre }, (res) => {
+        socket.emit('joinRoom', { code, nombre, sessionId: getClientSessionId() }, (res) => {
             if (!res?.ok) showError(res?.error || 'No se pudo unir');
         });
     });
@@ -1210,7 +1438,7 @@ function renderCustomDebugForm() {
             return;
         }
 
-        socket.emit('playCustomDebug', { nombre: customDebugPlayerName, config }, (res) => {
+        socket.emit('playCustomDebug', { nombre: customDebugPlayerName, config, sessionId: getClientSessionId() }, (res) => {
             if (!res?.ok) {
                 showError(res?.error || 'No se pudo iniciar el custom');
             }
@@ -1267,6 +1495,7 @@ function renderRoom() {
     `;
 
     document.getElementById('btnLeaveRoom').addEventListener('click', () => {
+        olvidarSala();
         socket.emit('leaveRoom');
         roomState = null;
         gameState = null;
@@ -1310,29 +1539,67 @@ function renderBoard() {
     const fase = gameState.faseActual;
     const esMiTurno = gameState.esMiTurno;
     const rivales = gameState.jugadores.filter(j => !j.esYo);
+    const yo = gameState.jugadores.find(j => j.esYo);
+    const revelandoVictoria = victoriaRevealActive && !!gameState.juegoTerminado;
+    const yoGane = revelandoVictoria && yo && yo.id === gameState.ganadorId;
+    const ganador = gameState.jugadores.find(j => j.id === gameState.ganadorId);
+    const winCardIds = revelandoVictoria ? idsCartasVictoriaGanador(gameState) : new Set();
+    // Si ganaste, la mesa se ve como si siguiera tu turno; si no, se resalta al rival
+    const aspectoTurnoActivo = revelandoVictoria
+        ? !!yoGane
+        : (esMiTurno && !gameState.juegoTerminado);
 
-    const puedeInteractuar = esMiTurno && !gameState.juegoTerminado;
+    const puedeInteractuar = esMiTurno && !gameState.juegoTerminado && !revelandoVictoria;
+
+    const bannerVictoria = revelandoVictoria
+        ? `<div class="victory-reveal-banner ${yoGane ? 'is-win' : 'is-lose'}" role="status">
+                <strong>${yoGane ? '¡Victoria!' : `¡Gana ${escapeHtml(ganador?.nombre || 'el rival')}!`}</strong>
+                <span>${escapeHtml(etiquetaVictoriaBreve(gameState))}</span>
+           </div>`
+        : '';
 
     appEl.innerHTML = `
-        <div class="game-container ${esMiTurno && !gameState.juegoTerminado ? 'my-turn' : 'their-turn'}" data-fase="${escapeAttr(fase || '')}">
+        <div class="game-container ${aspectoTurnoActivo ? 'my-turn' : 'their-turn'}${revelandoVictoria ? ` victory-reveal ${yoGane ? 'victory-reveal-win' : 'victory-reveal-lose'}` : ''}" data-fase="${escapeAttr(fase || '')}">
             <div id="actionToast" class="action-toast"></div>
+            ${bannerVictoria}
 
             <header class="game-topbar">
                 ${roomState ? `<div class="room-chip">Sala <strong>${escapeHtml(roomState.code)}</strong></div>` : '<div></div>'}
                 <div class="game-topbar-actions">
                     <button type="button" id="btnToggleHistory" class="game-icon-btn" aria-expanded="false" title="Historial">Historial</button>
                     <button type="button" id="btnDownloadReportLive" class="game-icon-btn" title="Descargar estado">Estado</button>
+                    <button type="button" id="btnLeaveGame" class="game-leave-btn" title="Salir de la partida" aria-label="Salir de la partida">×</button>
                 </div>
             </header>
             <p id="reportStatus" class="report-status-live text-muted" hidden></p>
 
-            <div id="opponentsRow" class="opponents-row">
-                ${rivales.map(jugador => `
-                    <div class="opponent-chip ${jugador.id === gameState.turnoActual ? 'is-turn' : ''}">
-                        <span class="opponent-chip-name">${escapeHtml(jugador.nombre)}</span>
-                        <span class="opponent-chip-count">${jugador.cartasCount}</span>
-                    </div>
-                `).join('')}
+            <div id="opponentsRow" class="opponents-row ${revelandoVictoria && !yoGane ? 'opponents-row-reveal' : ''}">
+                ${rivales.map(jugador => {
+                    const esGanador = revelandoVictoria && jugador.id === gameState.ganadorId;
+                    const mostrarMano = esGanador && Array.isArray(jugador.mano);
+                    return `
+                    <div class="opponent-block ${esGanador ? 'is-winner' : ''}">
+                        <div class="opponent-chip ${jugador.id === gameState.turnoActual || esGanador ? 'is-turn' : ''}">
+                            <span class="opponent-chip-name">${escapeHtml(jugador.nombre)}</span>
+                            <span class="opponent-chip-count">${jugador.cartasCount}</span>
+                        </div>
+                        ${renderPlayerMeldsHtml(jugador, {
+                            winCardIds,
+                            esGanador
+                        })}
+                        ${mostrarMano ? `
+                            <div class="opponent-hand-reveal">
+                                ${jugador.mano.map(card => renderCardHtml(
+                                    card,
+                                    false,
+                                    false,
+                                    false,
+                                    winCardIds.has(String(card.id))
+                                )).join('')}
+                            </div>
+                        ` : ''}
+                    </div>`;
+                }).join('')}
             </div>
 
             <div class="table-zone">
@@ -1347,13 +1614,13 @@ function renderBoard() {
                         <div id="discardPile"></div>
                     </div>
                 </div>
-                <div class="table-melds-section">
-                    <span class="melds-label">Mesa</span>
-                    <div id="meldsContainer" class="melds-container"></div>
-                </div>
             </div>
 
-            <div class="player-dashboard ${esMiTurno && !gameState.juegoTerminado ? 'is-active-turn' : 'is-waiting'}">
+            <div class="player-dashboard ${aspectoTurnoActivo ? 'is-active-turn' : 'is-waiting'}${yoGane ? ' winner-dashboard' : ''}">
+                ${yo ? renderPlayerMeldsHtml(yo, {
+                    winCardIds,
+                    esGanador: !!yoGane
+                }) : ''}
                 <div class="dashboard-header">
                     <div class="player-actions ${puedeInteractuar ? '' : 'actions-locked'}">
                         <button id="btnRobarDescarte" class="btn-success" style="display: none;">Robar descarte</button>
@@ -1410,29 +1677,11 @@ function renderBoard() {
         discardPileEl.innerHTML = `<div class="pile-empty">Vacío</div>`;
     }
 
-    // Melds
-    const meldsContainerEl = document.getElementById('meldsContainer');
-    const todosGrupos = gameState.jugadores.reduce((all, player) => {
-        return all.concat((player.gruposExpuestos || []).map(g => ({ cartas: g, owner: player.nombre })));
-    }, []);
-
-    if (todosGrupos.length > 0) {
-        meldsContainerEl.innerHTML = todosGrupos.map(group => `
-            <div class="meld-group">
-                <span class="meld-owner">${escapeHtml(group.owner)}</span>
-                <div class="meld-cards">
-                    ${group.cartas.map(card => renderCardHtml(card, false)).join('')}
-                </div>
-            </div>
-        `).join('');
-    } else {
-        meldsContainerEl.innerHTML = '';
-    }
-
     // Mano: siempre se puede reordenar; acciones de juego solo en tu turno
     renderManoLocal({
         puedeSeleccionar: puedeInteractuar,
-        puedeReordenar: !gameState.juegoTerminado
+        puedeReordenar: !gameState.juegoTerminado && !revelandoVictoria,
+        winCardIds
     });
 
     document.getElementById('btnDescartar').addEventListener('click', () => {
@@ -1475,12 +1724,23 @@ function renderBoard() {
         setHistoryOpen(false);
     });
 
+    document.getElementById('btnLeaveGame')?.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        confirmarSalirDePartida();
+    });
+
     actualizarEstadoBotones(puedeInteractuar);
 }
 
 function renderManoLocal(opts = {}) {
     const puedeSeleccionar = opts.puedeSeleccionar ?? gameState?.esMiTurno;
     const puedeReordenar = opts.puedeReordenar ?? !gameState?.juegoTerminado;
+    const winCardIds = opts.winCardIds instanceof Set
+        ? opts.winCardIds
+        : (victoriaRevealActive && gameState?.juegoTerminado
+            ? idsCartasVictoriaGanador(gameState)
+            : new Set());
     const handCardsEl = document.getElementById('handCards');
     if (!handCardsEl || !gameState) return;
 
@@ -1492,7 +1752,8 @@ function renderManoLocal(opts = {}) {
         const interactive = !!(puedeSeleccionar || puedeReordenar);
         const justDrawn = cartaRobadaHighlightId != null
             && String(card.id) === String(cartaRobadaHighlightId);
-        return renderCardHtml(card, interactive, isSelected && !!puedeSeleccionar, justDrawn);
+        const winShine = winCardIds.has(String(card.id));
+        return renderCardHtml(card, interactive, isSelected && !!puedeSeleccionar, justDrawn, winShine);
     }).join('');
 
     if (puedeSeleccionar) {
@@ -1505,7 +1766,7 @@ function renderManoLocal(opts = {}) {
                 else cartasSeleccionadasIds.splice(index, 1);
                 playSound('select');
                 actualizarEstadoBotones(true);
-                renderManoLocal({ puedeSeleccionar: true, puedeReordenar });
+                renderManoLocal({ puedeSeleccionar: true, puedeReordenar, winCardIds });
             });
         });
     }
@@ -1586,12 +1847,13 @@ function solicitarRoboDescarte(topCard) {
     alert(`Para robar ${topCard.label}${topCard.suitLabel}, selecciona ≥2 cartas de tu mano que formen un grupo válido con ella. Luego usa el botón verde.`);
 }
 
-function renderCardHtml(card, interactive = false, selected = false, justDrawn = false) {
+function renderCardHtml(card, interactive = false, selected = false, justDrawn = false, winShine = false) {
     const classInteractive = interactive ? 'interactive-card' : '';
     const classSelected = selected ? 'selected' : '';
     const classDrawn = justDrawn ? 'just-drawn-from-deck' : '';
+    const classWin = winShine ? 'win-shine' : '';
     return `
-        <div class="card ${card.color} ${classInteractive} ${classSelected} ${classDrawn}" data-id="${card.id}">
+        <div class="card ${card.color} ${classInteractive} ${classSelected} ${classDrawn} ${classWin}" data-id="${card.id}">
             <div class="card-top">
                 <span class="card-value">${card.label}</span>
                 <span class="card-suit-mini">${card.suitLabel}</span>

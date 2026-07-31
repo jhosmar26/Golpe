@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <title>Vista previa — Carta de mesa (grupo)</title>
+    <link rel="stylesheet" href="index.css">
+    <style>
+        /* Solo layout de esta página. Edita el estilo en index.css (.meld-cards .card, etc.) */
+        html, body {
+            margin: 0;
+            height: 100%;
+            overflow: hidden;
+        }
+
+        body.card-preview-page {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            background:
+                radial-gradient(at 20% 20%, hsla(253, 50%, 18%, 0.55) 0px, transparent 50%),
+                radial-gradient(at 80% 80%, hsla(225, 40%, 14%, 0.6) 0px, transparent 50%),
+                var(--bg-main);
+        }
+
+        .preview-hint {
+            position: fixed;
+            top: 1rem;
+            left: 50%;
+            transform: translateX(-50%);
+            color: var(--text-secondary);
+            font-size: 0.9rem;
+            text-align: center;
+            z-index: 2;
+            pointer-events: none;
+            max-width: min(92vw, 36rem);
+            line-height: 1.4;
+        }
+
+        .preview-hint code {
+            color: var(--color-accent-hover);
+        }
+
+        .preview-stage {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 100%;
+            height: 100%;
+        }
+
+        /* Misma jerarquía que en el juego: .meld-group > .meld-cards > .card */
+        .preview-stage .meld-group {
+            transform: scale(4.5);
+            transform-origin: center center;
+            background: rgba(0, 0, 0, 0.15);
+        }
+
+        .preview-stage .meld-cards .card {
+            cursor: default;
+        }
+
+        .preview-stage .meld-cards .card:hover {
+            transform: none;
+        }
+    </style>
+</head>
+<body class="card-preview-page">
+    <p class="preview-hint">
+        Carta de <strong>grupo en mesa</strong>. Edita <code>index.css</code>
+        (<code>.meld-cards .card</code>, <code>.meld-cards .card-top</code>, etc.) y recarga.
+    </p>
+
+    <div class="preview-stage">
+        <div class="meld-group">
+            <div class="meld-cards">
+                <div class="card red" data-id="preview-meld">
+                    <div class="card-top">
+                        <span class="card-value">A</span>
+                        <span class="card-suit-mini">♥</span>
+                    </div>
+                    <div class="card-center">♥</div>
+                    <div class="card-bottom">
+                        <span class="card-value">A</span>
+                        <span class="card-suit-mini">♥</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</body>
+</html>

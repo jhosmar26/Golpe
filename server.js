@@ -20,6 +20,8 @@ const HOST = process.env.HOST || '0.0.0.0';
 const LOBBY_MIN = 2;
 const LOBBY_MAX = 6;
 const BOT_NOMBRES = ['Bot Ana', 'Bot Luis', 'Bot Sofía', 'Bot Diego', 'Bot Marta'];
+/** Tiempo para volver a la partida tras minimizar el navegador / cortar red. */
+const RECONNECT_GRACE_MS = 3 * 60 * 1000;
 
 const app = express();
 const server = http.createServer(app);
@@ -68,7 +70,10 @@ function serializarLobby(room, socketId) {
             conectado: p.conectado,
             esBot: !!p.esBot,
             esYo: !p.esBot && p.socketId === socketId,
-            esHost: !p.esBot && p.socketId === room.hostId
+            esHost: !p.esBot && p.socketId === room.hostId,
+            ...( !p.esBot && p.socketId === socketId && p.sessionId
+                ? { sessionId: p.sessionId }
+                : {})
         })),
         minPlayers: LOBBY_MIN,
         maxPlayers: LOBBY_MAX,
@@ -95,6 +100,43 @@ function emitirGameState(room) {
 
 function encontrarJugador(room, socketId) {
     return room.players.find(p => !p.esBot && p.socketId === socketId) || null;
+}
+
+function normalizarSessionId(raw) {
+    const s = String(raw || '').trim();
+    if (s && s.length >= 8 && s.length <= 80) return s;
+    return crypto.randomUUID();
+}
+
+function crearJugadorHumano(socket, nombre, sessionId) {
+    return {
+        socketId: socket.id,
+        nombre,
+        conectado: true,
+        esBot: false,
+        playerIndex: null,
+        sessionId: normalizarSessionId(sessionId)
+    };
+}
+
+function cancelarGraciaEliminacion(room) {
+    if (room?._graceTimer) {
+        clearTimeout(room._graceTimer);
+        room._graceTimer = null;
+    }
+}
+
+function programarEliminacionSiVacia(room) {
+    if (!room) return;
+    cancelarGraciaEliminacion(room);
+    room._graceTimer = setTimeout(() => {
+        room._graceTimer = null;
+        const alguienHumano = room.players.some(p => !p.esBot && p.conectado);
+        if (alguienHumano) return;
+        if (room._botTimer) clearTimeout(room._botTimer);
+        rooms.delete(room.code);
+        console.log(`[Sala ${room.code}] eliminada (gracia de reconexión agotada)`);
+    }, RECONNECT_GRACE_MS);
 }
 
 function crearBot(room) {
@@ -166,22 +208,17 @@ function ejecutarTurnoBot(room) {
 io.on('connection', (socket) => {
     console.log(`[+] Conectado: ${socket.id}`);
 
-    socket.on('createRoom', ({ nombre } = {}, ack) => {
+    socket.on('createRoom', ({ nombre, sessionId } = {}, ack) => {
         const nombreLimpio = String(nombre || '').trim() || 'Anfitrión';
         const code = generarCodigoSala();
         const room = {
             code,
             hostId: socket.id,
             status: 'lobby',
-            players: [{
-                socketId: socket.id,
-                nombre: nombreLimpio,
-                conectado: true,
-                esBot: false,
-                playerIndex: null
-            }],
+            players: [crearJugadorHumano(socket, nombreLimpio, sessionId)],
             game: null,
-            _botTimer: null
+            _botTimer: null,
+            _graceTimer: null
         };
         rooms.set(code, room);
         socket.data.roomCode = code;
@@ -193,7 +230,7 @@ io.on('connection', (socket) => {
         console.log(`[Sala ${code}] creada por ${nombreLimpio}`);
     });
 
-    socket.on('joinRoom', ({ code, nombre } = {}, ack) => {
+    socket.on('joinRoom', ({ code, nombre, sessionId } = {}, ack) => {
         const codeNorm = String(code || '').trim();
         const room = rooms.get(codeNorm);
         const responder = (data) => {
@@ -214,13 +251,8 @@ io.on('connection', (socket) => {
         }
 
         const nombreLimpio = String(nombre || '').trim() || `Jugador ${room.players.length + 1}`;
-        room.players.push({
-            socketId: socket.id,
-            nombre: nombreLimpio,
-            conectado: true,
-            esBot: false,
-            playerIndex: null
-        });
+        room.players.push(crearJugadorHumano(socket, nombreLimpio, sessionId));
+        cancelarGraciaEliminacion(room);
         socket.data.roomCode = codeNorm;
         socket.join(codeNorm);
 
@@ -257,7 +289,7 @@ io.on('connection', (socket) => {
         console.log(`[Sala ${room.code}] se agregó ${bot.nombre}`);
     });
 
-    socket.on('playVsBots', ({ nombre, numBots = 1 } = {}, ack) => {
+    socket.on('playVsBots', ({ nombre, numBots = 1, sessionId } = {}, ack) => {
         const responder = (data) => {
             if (typeof ack === 'function') ack(data);
         };
@@ -269,15 +301,10 @@ io.on('connection', (socket) => {
             code,
             hostId: socket.id,
             status: 'lobby',
-            players: [{
-                socketId: socket.id,
-                nombre: nombreLimpio,
-                conectado: true,
-                esBot: false,
-                playerIndex: null
-            }],
+            players: [crearJugadorHumano(socket, nombreLimpio, sessionId)],
             game: null,
-            _botTimer: null
+            _botTimer: null,
+            _graceTimer: null
         };
         for (let i = 0; i < n; i++) crearBot(room);
 
@@ -290,7 +317,7 @@ io.on('connection', (socket) => {
         console.log(`[Sala ${code}] vs bots (${n}) para ${nombreLimpio}`);
     });
 
-    socket.on('playDebugScenario', ({ nombre, scenarioId } = {}, ack) => {
+    socket.on('playDebugScenario', ({ nombre, scenarioId, sessionId } = {}, ack) => {
         const responder = (data) => {
             if (typeof ack === 'function') ack(data);
         };
@@ -312,15 +339,10 @@ io.on('connection', (socket) => {
             code,
             hostId: socket.id,
             status: 'lobby',
-            players: [{
-                socketId: socket.id,
-                nombre: nombreLimpio,
-                conectado: true,
-                esBot: false,
-                playerIndex: null
-            }],
+            players: [crearJugadorHumano(socket, nombreLimpio, sessionId)],
             game: null,
             _botTimer: null,
+            _graceTimer: null,
             esDebug: true
         };
         crearBot(room);
@@ -360,7 +382,7 @@ io.on('connection', (socket) => {
         console.log(`[Sala ${code}] debug «${id}» para ${nombreLimpio}`);
     });
 
-    socket.on('playCustomDebug', ({ nombre, config } = {}, ack) => {
+    socket.on('playCustomDebug', ({ nombre, config, sessionId } = {}, ack) => {
         const responder = (data) => {
             if (typeof ack === 'function') ack(data);
         };
@@ -375,15 +397,10 @@ io.on('connection', (socket) => {
             code,
             hostId: socket.id,
             status: 'lobby',
-            players: [{
-                socketId: socket.id,
-                nombre: nombreLimpio,
-                conectado: true,
-                esBot: false,
-                playerIndex: null
-            }],
+            players: [crearJugadorHumano(socket, nombreLimpio, sessionId)],
             game: null,
             _botTimer: null,
+            _graceTimer: null,
             esDebug: true
         };
         crearBot(room);
@@ -585,6 +602,7 @@ io.on('connection', (socket) => {
             clearTimeout(room._botTimer);
             room._botTimer = null;
         }
+        cancelarGraciaEliminacion(room);
         room.game = null;
         room.status = 'lobby';
         room.players.forEach(p => {
@@ -593,6 +611,58 @@ io.on('connection', (socket) => {
         emitirLobby(room);
         io.to(room.code).emit('gameState', null);
         responder({ ok: true });
+    });
+
+    socket.on('reclaimSession', ({ roomCode, sessionId } = {}, ack) => {
+        const responder = (data) => {
+            if (typeof ack === 'function') ack(data);
+        };
+        const code = String(roomCode || '').trim();
+        const sid = String(sessionId || '').trim();
+        if (!code || !sid) {
+            responder({ ok: false, error: 'Sesión incompleta.' });
+            return;
+        }
+
+        const room = rooms.get(code);
+        if (!room) {
+            responder({ ok: false, error: 'La partida ya no está disponible.' });
+            return;
+        }
+
+        const jugador = room.players.find(p => !p.esBot && p.sessionId === sid);
+        if (!jugador) {
+            responder({ ok: false, error: 'No se encontró tu asiento en la sala.' });
+            return;
+        }
+
+        // Si ya estaba en otra sala con este socket, limpiar
+        if (socket.data.roomCode && socket.data.roomCode !== code) {
+            salirDeSala(socket);
+        }
+
+        const eraHost = room.hostId === jugador.socketId;
+        jugador.socketId = socket.id;
+        jugador.conectado = true;
+        if (eraHost) room.hostId = socket.id;
+
+        cancelarGraciaEliminacion(room);
+        socket.data.roomCode = code;
+        socket.join(code);
+
+        if (room.game) {
+            room.game.log(`${jugador.nombre} se reconectó.`);
+        }
+
+        emitirLobby(room);
+        if (room.game && jugador.playerIndex != null) {
+            const vista = room.game.serializarParaJugador(jugador.playerIndex);
+            socket.emit('gameState', vista);
+        }
+        programarTurnosBot(room);
+
+        responder({ ok: true, room: serializarLobby(room, socket.id) });
+        console.log(`[Sala ${code}] ${jugador.nombre} reconectó`);
     });
 
     socket.on('disconnect', () => {
@@ -623,6 +693,7 @@ function salirDeSala(socket, porDesconexion = false) {
         const humanos = room.players.filter(p => !p.esBot);
         if (humanos.length === 0) {
             if (room._botTimer) clearTimeout(room._botTimer);
+            cancelarGraciaEliminacion(room);
             rooms.delete(code);
             console.log(`[Sala ${code}] eliminada (vacía)`);
         } else {
@@ -631,7 +702,8 @@ function salirDeSala(socket, porDesconexion = false) {
             }
             emitirLobby(room);
         }
-    } else {
+    } else if (porDesconexion) {
+        // Partida en curso / terminada: conservar asiento para reconectar (p.ej. minimizar el browser)
         jugador.conectado = false;
         if (room.game) {
             room.game.log(`${jugador.nombre} se desconectó.`);
@@ -641,10 +713,30 @@ function salirDeSala(socket, porDesconexion = false) {
 
         const alguienHumano = room.players.some(p => !p.esBot && p.conectado);
         if (!alguienHumano) {
-            if (room._botTimer) clearTimeout(room._botTimer);
-            rooms.delete(code);
-            console.log(`[Sala ${code}] eliminada (todos desconectados)`);
+            if (room._botTimer) {
+                clearTimeout(room._botTimer);
+                room._botTimer = null;
+            }
+            programarEliminacionSiVacia(room);
+            console.log(`[Sala ${code}] esperando reconexión (${RECONNECT_GRACE_MS / 1000}s)`);
         } else {
+            programarTurnosBot(room);
+        }
+    } else {
+        // Salida voluntaria: liberar asiento ya
+        room.players.splice(idx, 1);
+        const humanos = room.players.filter(p => !p.esBot);
+        if (humanos.length === 0) {
+            if (room._botTimer) clearTimeout(room._botTimer);
+            cancelarGraciaEliminacion(room);
+            rooms.delete(code);
+            console.log(`[Sala ${code}] eliminada (salida voluntaria)`);
+        } else {
+            if (room.hostId === socket.id) {
+                room.hostId = humanos.find(p => p.conectado)?.socketId || humanos[0].socketId;
+            }
+            if (room.game) emitirGameState(room);
+            emitirLobby(room);
             programarTurnosBot(room);
         }
     }
