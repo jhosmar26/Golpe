@@ -91,6 +91,139 @@ function enviarAccion(type, payload = {}) {
     });
 }
 
+function htmlBotonHurryUp() {
+    return `<button type="button" id="btnHurryUp" class="btn-hurry-up" title="Apurá al jugador del turno" aria-label="Apurate">
+        <span class="btn-hurry-icons" aria-hidden="true">
+            <span class="btn-hurry-emoji btn-hurry-emoji-angry">😠</span>
+            <span class="btn-hurry-emoji btn-hurry-emoji-clock">⏰</span>
+        </span>
+    </button>`;
+}
+
+let hurryOverlayTimer = null;
+let hurryFxRecent = [];
+
+function enviarHurryUp() {
+    if (!gameState || gameState.juegoTerminado || gameState.esMiTurno) return;
+    socket.emit('hurryUp', {}, (res) => {
+        if (res && !res.ok && res.error) {
+            lastError = res.error;
+        }
+    });
+}
+
+/** Capa ambient detrás de la UI (pointer-events none); se puede spamear. */
+function asegurarHurryOverlayEl() {
+    let overlay = document.getElementById('hurryOverlay');
+    if (overlay && overlay.parentElement === document.body) return overlay;
+
+    if (overlay) overlay.remove();
+
+    overlay = document.createElement('div');
+    overlay.id = 'hurryOverlay';
+    overlay.className = 'hurry-overlay';
+    overlay.setAttribute('aria-hidden', 'true');
+    overlay.hidden = true;
+    overlay.innerHTML = `
+        <div class="hurry-overlay-tint"></div>
+        <div class="hurry-overlay-particles" id="hurryParticles"></div>
+    `;
+    document.body.appendChild(overlay);
+    return overlay;
+}
+
+function spawnHurryParticle(container, intensity, index) {
+    if (!container) return;
+
+    const el = document.createElement('span');
+    el.className = 'hurry-particle';
+    el.innerHTML = '<span class="hurry-particle-emoji">⏰</span>';
+
+    const sides = intensity <= 1
+        ? ['bottom']
+        : intensity <= 3
+            ? ['bottom', 'bottom-left', 'bottom-right']
+            : ['bottom', 'bottom-left', 'bottom-right', 'left', 'right'];
+    const side = sides[Math.floor(Math.random() * sides.length)];
+
+    let left = 50;
+    let originY = '110%';
+    if (side === 'bottom') {
+        left = 18 + Math.random() * 64;
+        originY = '108%';
+    } else if (side === 'bottom-left') {
+        left = 4 + Math.random() * 22;
+        originY = '105%';
+    } else if (side === 'bottom-right') {
+        left = 74 + Math.random() * 22;
+        originY = '105%';
+    } else if (side === 'left') {
+        left = -4 + Math.random() * 10;
+        originY = `${55 + Math.random() * 40}%`;
+    } else {
+        left = 90 + Math.random() * 10;
+        originY = `${55 + Math.random() * 40}%`;
+    }
+
+    const driftX = (Math.random() - 0.5) * (28 + intensity * 4);
+    const duration = 1.35 + Math.random() * 0.55;
+    const size = 2.35 + Math.random() * 0.7 + Math.min(intensity, 6) * 0.06;
+
+    el.style.left = `${left}%`;
+    el.style.top = originY;
+    el.style.setProperty('--hurry-drift-x', `${driftX}vw`);
+    el.style.setProperty('--hurry-duration', `${duration}s`);
+    el.style.setProperty('--hurry-delay', `${index * 0.05}s`);
+    el.style.setProperty('--hurry-size', `${size}rem`);
+
+    container.appendChild(el);
+    const cleanup = () => el.remove();
+    el.addEventListener('animationend', cleanup);
+    window.setTimeout(cleanup, (duration + index * 0.05 + 0.2) * 1000);
+}
+
+function scheduleHurryOverlayHide(overlay) {
+    if (hurryOverlayTimer) window.clearTimeout(hurryOverlayTimer);
+    hurryOverlayTimer = window.setTimeout(() => {
+        const particles = document.getElementById('hurryParticles');
+        const stillBusy = particles && particles.children.length > 0;
+        const recent = hurryFxRecent.some(t => Date.now() - t < 400);
+        if (stillBusy || recent) {
+            scheduleHurryOverlayHide(overlay);
+            return;
+        }
+        overlay.classList.remove('is-flash');
+        overlay.hidden = true;
+        hurryOverlayTimer = null;
+    }, 1550);
+}
+
+function mostrarHurryUp(_fromName) {
+    const overlay = asegurarHurryOverlayEl();
+    const particles = document.getElementById('hurryParticles');
+    const now = Date.now();
+
+    hurryFxRecent = hurryFxRecent.filter(t => now - t < 2600);
+    hurryFxRecent.push(now);
+    const intensity = Math.min(hurryFxRecent.length, 8);
+
+    overlay.hidden = false;
+    overlay.dataset.intensity = String(intensity);
+    overlay.classList.remove('is-flash');
+    void overlay.offsetWidth;
+    overlay.classList.add('is-flash');
+
+    const count = intensity === 1
+        ? 1
+        : Math.min(1 + Math.floor(intensity * 0.9), 7);
+    for (let i = 0; i < count; i++) {
+        spawnHurryParticle(particles, intensity, i);
+    }
+
+    try { playSound('select'); } catch (_) {}
+    scheduleHurryOverlayHide(overlay);
+}
+
 const SESSION_ID_KEY = 'golpeadoSessionId';
 const ROOM_CODE_KEY = 'golpeadoRoomCode';
 
@@ -255,6 +388,22 @@ socket.on('roomState', (state) => {
         }
         render();
     }
+});
+
+socket.on('hurryUp', (payload = {}) => {
+    if (!gameState || gameState.juegoTerminado) return;
+
+    const yo = gameState.jugadores?.find(j => j.esYo);
+    if (!yo) return;
+
+    // Solo el jugador cuyo turno es el objetivo — nunca quien apura
+    const target = payload.targetIndex != null
+        ? Number(payload.targetIndex)
+        : Number(gameState.turnoActual);
+    if (Number(yo.id) !== target) return;
+    if (!gameState.esMiTurno) return;
+
+    mostrarHurryUp(payload.from || 'Alguien');
 });
 
 socket.on('gameState', (state) => {
@@ -832,6 +981,25 @@ function actualizarTableroSinMano() {
                 if (!(gameState?.esMiTurno && !gameState.juegoTerminado)) return;
                 solicitarDescartar();
             });
+        }
+    }
+
+    // Botón Apurate: solo cuando no es tu turno
+    const tableZone = document.querySelector('.table-zone');
+    if (tableZone) {
+        const showHurry = !puedeInteractuar && !gameState.juegoTerminado && !victoriaRevealActive;
+        let btnHurry = document.getElementById('btnHurryUp');
+        if (showHurry && !btnHurry) {
+            const wrap = document.createElement('div');
+            wrap.innerHTML = htmlBotonHurryUp().trim();
+            btnHurry = wrap.firstElementChild;
+            btnHurry.addEventListener('click', () => {
+                playSound('click');
+                enviarHurryUp();
+            });
+            tableZone.appendChild(btnHurry);
+        } else if (!showHurry && btnHurry) {
+            btnHurry.remove();
         }
     }
 
@@ -1839,6 +2007,9 @@ function renderBoard() {
                         <button type="button" id="btnCantarPuntos" class="btn-secondary btn-cantar-mesa" disabled title="Cantar victoria por puntos">Cantar</button>
                     </div>
                 </div>
+                ${!puedeInteractuar && !gameState.juegoTerminado && !revelandoVictoria
+                    ? htmlBotonHurryUp()
+                    : ''}
             </div>
 
             <div class="player-dashboard ${aspectoTurnoActivo ? 'is-active-turn' : 'is-waiting'}${yoGane ? ' winner-dashboard' : ''}">
@@ -1934,6 +2105,11 @@ function renderBoard() {
         if (!puedeInteractuar) return;
         const confirmacion = confirm('¿Cantar victoria por puntos y detener el juego?');
         if (confirmacion) enviarAccion('CANTAR_PUNTOS');
+    });
+
+    document.getElementById('btnHurryUp')?.addEventListener('click', () => {
+        playSound('click');
+        enviarHurryUp();
     });
 
     const btnLiveReport = document.getElementById('btnDownloadReportLive');

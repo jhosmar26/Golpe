@@ -52,6 +52,8 @@ body {
     padding: 1.5rem;
     max-width: 1400px;
     margin: 0 auto;
+    position: relative;
+    z-index: 1;
 }
 
 /* ==========================================
@@ -1020,13 +1022,177 @@ body:has(.game-container) {
 }
 
 .table-zone {
+    position: relative;
     display: flex;
     flex-direction: column;
     justify-content: center;
     align-items: center;
     gap: 0.45rem;
     min-height: 0;
+    overflow: visible;
+}
+
+.btn-hurry-up {
+    position: absolute;
+    right: 0.2rem;
+    top: 50%;
+    transform: translateY(-50%);
+    z-index: 4;
+    width: 2.65rem;
+    height: 2.65rem;
+    min-width: 2.65rem;
+    padding: 0;
+    border-radius: 999px;
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    background: rgba(20, 24, 32, 0.62);
+    color: var(--text-muted);
+    font-family: inherit;
+    cursor: pointer;
+    opacity: 0.78;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    transition: opacity 0.15s ease, border-color 0.15s ease, background 0.15s ease, transform 0.12s ease;
+}
+
+.btn-hurry-up:hover {
+    opacity: 1;
+    border-color: rgba(255, 190, 120, 0.5);
+    background: rgba(60, 40, 20, 0.62);
+}
+
+.btn-hurry-up:active {
+    transform: translateY(-50%) scale(0.94);
+}
+
+.btn-hurry-icons {
+    position: relative;
+    width: 1.55rem;
+    height: 1.55rem;
+    line-height: 1;
+    pointer-events: none;
+}
+
+.btn-hurry-emoji {
+    position: absolute;
+    font-size: 1.05rem;
+    line-height: 1;
+    filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.45));
+}
+
+.btn-hurry-emoji-angry {
+    top: 0;
+    left: 0.05rem;
+    z-index: 2;
+}
+
+.btn-hurry-emoji-clock {
+    bottom: -0.05rem;
+    right: 0;
+    z-index: 1;
+    font-size: 0.95rem;
+}
+
+/* Aviso ambient detrás de #app: no tapa controles ni cartas */
+.hurry-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 0;
+    display: block;
+    pointer-events: none;
     overflow: hidden;
+}
+
+.hurry-overlay[hidden] {
+    display: none !important;
+}
+
+.hurry-overlay:not([hidden]) {
+    display: block !important;
+}
+
+.hurry-overlay-tint {
+    position: absolute;
+    inset: 0;
+    background: rgba(190, 28, 28, 0);
+    opacity: 0;
+}
+
+.hurry-overlay.is-flash .hurry-overlay-tint {
+    animation: hurryTintFlash 1.5s ease-out forwards;
+}
+
+.hurry-overlay[data-intensity="1"] { --hurry-tint-peak: 0.2; }
+.hurry-overlay[data-intensity="2"] { --hurry-tint-peak: 0.26; }
+.hurry-overlay[data-intensity="3"] { --hurry-tint-peak: 0.32; }
+.hurry-overlay[data-intensity="4"] { --hurry-tint-peak: 0.38; }
+.hurry-overlay[data-intensity="5"] { --hurry-tint-peak: 0.44; }
+.hurry-overlay[data-intensity="6"] { --hurry-tint-peak: 0.5; }
+.hurry-overlay[data-intensity="7"] { --hurry-tint-peak: 0.56; }
+.hurry-overlay[data-intensity="8"] { --hurry-tint-peak: 0.62; }
+
+.hurry-overlay-particles {
+    position: absolute;
+    inset: 0;
+    overflow: hidden;
+}
+
+.hurry-particle {
+    position: absolute;
+    width: var(--hurry-size, 2.6rem);
+    height: var(--hurry-size, 2.6rem);
+    margin-left: calc(var(--hurry-size, 2.6rem) / -2);
+    margin-top: calc(var(--hurry-size, 2.6rem) / -2);
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(210, 45, 45, 0.48);
+    border: 1.5px solid rgba(255, 120, 100, 0.55);
+    box-shadow: 0 0 14px rgba(180, 30, 30, 0.28);
+    opacity: 0;
+    animation: hurryParticleRise var(--hurry-duration, 1.5s) ease-out forwards;
+    animation-delay: var(--hurry-delay, 0s);
+    will-change: transform, opacity;
+}
+
+.hurry-particle-emoji {
+    font-size: calc(var(--hurry-size, 2.6rem) * 0.52);
+    line-height: 1;
+    filter: saturate(1.05);
+}
+
+@keyframes hurryTintFlash {
+    0% {
+        background: rgba(190, 28, 28, 0);
+        opacity: 0;
+    }
+    14% {
+        background: rgba(190, 28, 28, var(--hurry-tint-peak, 0.16));
+        opacity: 1;
+    }
+    100% {
+        background: rgba(190, 28, 28, 0);
+        opacity: 0;
+    }
+}
+
+@keyframes hurryParticleRise {
+    0% {
+        opacity: 0;
+        transform: translate3d(0, 0, 0) scale(0.72);
+    }
+    12% {
+        opacity: 0.62;
+        transform: translate3d(calc(var(--hurry-drift-x, 0vw) * 0.15), -8vh, 0) scale(1);
+    }
+    70% {
+        opacity: 0.42;
+    }
+    100% {
+        opacity: 0;
+        transform: translate3d(var(--hurry-drift-x, 0vw), -115vh, 0) scale(1.08);
+    }
 }
 
 .pile-zone {
@@ -2366,6 +2532,31 @@ body.is-drawing-from-deck {
         max-width: 100%;
         min-width: 0;
         box-sizing: border-box;
+    }
+
+    .btn-hurry-up {
+        right: 0.05rem;
+        width: 2.4rem;
+        height: 2.4rem;
+        min-width: 2.4rem;
+        opacity: 0.82;
+    }
+
+    .btn-hurry-icons {
+        width: 1.4rem;
+        height: 1.4rem;
+    }
+
+    .btn-hurry-emoji {
+        font-size: 0.95rem;
+    }
+
+    .btn-hurry-emoji-clock {
+        font-size: 0.88rem;
+    }
+
+    .hurry-particle {
+        --hurry-size: 2.2rem;
     }
 
     .game-topbar {

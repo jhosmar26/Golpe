@@ -666,6 +666,50 @@ io.on('connection', (socket) => {
         programarTurnosBot(room);
     });
 
+    socket.on('hurryUp', (payload = {}, ack) => {
+        const responder = (data) => {
+            if (typeof ack === 'function') ack(data);
+        };
+        const room = obtenerSalaDeSocket(socket);
+        if (!room || !room.game || room.status !== 'playing') {
+            responder({ ok: false, error: 'No hay partida activa.' });
+            return;
+        }
+        if (room.game.juegoTerminado) {
+            responder({ ok: false, error: 'La partida ya terminó.' });
+            return;
+        }
+
+        const sender = encontrarJugador(room, socket.id);
+        if (!sender || sender.playerIndex == null) {
+            responder({ ok: false, error: 'No eres un jugador de esta partida.' });
+            return;
+        }
+        if (room.game.esTurnoDe(sender.playerIndex)) {
+            responder({ ok: false, error: 'Es tu turno.' });
+            return;
+        }
+
+        const targetIndex = room.game.turnoActual;
+        const msg = {
+            from: sender.nombre || 'Alguien',
+            targetIndex
+        };
+
+        // A la sala excepto quien apura; el cliente solo muestra si es el objetivo.
+        socket.to(room.code).emit('hurryUp', msg);
+
+        // Refuerzo directo al socket del jugador en turno (si está conectado)
+        const actual = room.players.find(p => p.playerIndex === targetIndex);
+        if (actual && !actual.esBot && actual.conectado && actual.socketId && actual.socketId !== socket.id) {
+            const sock = io.sockets.sockets.get(actual.socketId);
+            if (sock) sock.emit('hurryUp', msg);
+        }
+
+        console.log(`[Sala ${room.code}] hurryUp de ${sender.nombre} → turno ${targetIndex}`);
+        responder({ ok: true });
+    });
+
     socket.on('returnToLobby', (ack) => {
         const room = obtenerSalaDeSocket(socket);
         const responder = (data) => {
