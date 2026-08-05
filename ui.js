@@ -821,6 +821,10 @@ function renderPlayerMeldsHtml(player, opts = {}) {
     const esYo = !!opts.esYo || !!player?.esYo;
     const dropReady = !!opts.dropReady;
     const stagingHtml = esYo ? renderStagingMeldGroupHtml() : '';
+    const showPlus = esYo && puedeBajarGrupoPorSeleccion();
+    const plusHtml = esYo
+        ? `<button type="button" id="btnMeldSelectPlus" class="btn-meld-select-plus" ${showPlus ? '' : 'hidden'} title="Bajar grupo con el descarte" aria-label="Bajar grupo">+</button>`
+        : '';
     const attrs = [
         `data-player-melds="${escapeAttr(String(player?.id ?? ''))}"`,
         esYo ? 'id="myMeldDropZone"' : '',
@@ -841,14 +845,15 @@ function renderPlayerMeldsHtml(player, opts = {}) {
         </div>
     `).join('');
 
-    if (!grupos.length && !stagingHtml && !dropReady) {
+    if (!grupos.length && !stagingHtml && !dropReady && !esYo) {
         return `<div class="player-melds" ${attrs}></div>`;
     }
 
     return `
-        <div class="player-melds ${dropReady ? 'is-meld-drop-ready' : ''} ${stagingMeldActivo() && esYo ? 'has-staging' : ''}" ${attrs}>
+        <div class="player-melds ${dropReady || showPlus ? 'is-meld-drop-ready' : ''} ${stagingMeldActivo() && esYo ? 'has-staging' : ''} ${showPlus ? 'has-meld-select-plus' : ''}" ${attrs}>
             ${gruposHtml}
             ${stagingHtml}
+            ${plusHtml}
         </div>
     `;
 }
@@ -1058,6 +1063,7 @@ function actualizarTableroSinMano() {
             }).trim();
             const next = tmp.firstElementChild;
             if (next) mySlot.replaceWith(next);
+            bindBotonMeldSelectPlus();
         }
     }
 
@@ -1264,7 +1270,10 @@ function renderCustomDebugForm() {
                 </div>
                 <p class="custom-debug-lead">
                     Al elegir valor <strong>o</strong> palo aparece el siguiente selector.
-                    Máximo 8; si uno llega a 8, el otro solo puede llegar a 7.
+                    Clic en <strong>tu contador</strong>: vos empezás; alterna <strong>0/8 ↔ 0/7</strong> (con cuántas abrís).
+                    El rival, como segundo, queda en <strong>0/7</strong>.
+                    Clic en el <strong>contador del rival</strong>: él empieza y ahí se alterna su 0/8 ↔ 0/7; vos quedás en 0/7.
+                    Se resalta abajo la sección de quien abre.
                     Con más de 2 selectores: deslizá o clic derecho para borrarlos.
                     Si hay 1–2: el vacío no se borra; uno con valor/palo se limpia.
                     Si formás un grupo (mismo número ×3/4 o escalera), las cartas se resaltan
@@ -1274,19 +1283,19 @@ function renderCustomDebugForm() {
                 </p>
 
                 <div class="custom-debug-grid">
-                    <section class="custom-debug-section">
+                    <section class="custom-debug-section" id="sectionMi">
                         <h2 class="custom-hand-heading">
                             Tus cartas
-                            <span class="custom-hand-count" id="countMi">0/8</span>
+                            <button type="button" class="custom-hand-count custom-hand-count-toggle" id="countMi" title="Clic: vos empezás con 8">0/8</button>
                             <span class="custom-group-toggles" id="groupTogglesMi"></span>
                         </h2>
                         <div class="card-picker-grid" id="pickersMiMano"></div>
                     </section>
 
-                    <section class="custom-debug-section">
+                    <section class="custom-debug-section" id="sectionRival">
                         <h2 class="custom-hand-heading">
                             Rival
-                            <span class="custom-hand-count" id="countRival">0/8</span>
+                            <button type="button" class="custom-hand-count custom-hand-count-toggle" id="countRival" title="Clic: el rival empieza con 8">0/7</button>
                             <span class="custom-group-toggles" id="groupTogglesRival"></span>
                         </h2>
                         <div class="card-picker-grid" id="pickersRivalMano"></div>
@@ -1336,6 +1345,11 @@ function renderCustomDebugForm() {
         mi: new Map(),
         rival: new Map()
     };
+
+    /** Quién abre la partida. El otro queda siempre en 7. */
+    let quienEmpieza = 'mi'; // 'mi' | 'rival'
+    /** Cartas de quien abre: 7 u 8 (toggle en su contador). */
+    let cupoStarter = 8;
 
     const GROUP_COLORS = ['#22d3ee', '#34d399', '#fbbf24', '#fb7185'];
 
@@ -1449,9 +1463,71 @@ function renderCustomDebugForm() {
 
     const maxFor = (group) => {
         if (group === 'proxima') return 12;
-        if (group === 'mi') return countStarted('rival') >= 8 ? 7 : 8;
-        if (group === 'rival') return countStarted('mi') >= 8 ? 7 : 8;
+        if (group === 'mi') {
+            if (countStarted('rival') >= 8) return 7;
+            return quienEmpieza === 'mi' ? cupoStarter : 7;
+        }
+        if (group === 'rival') {
+            if (countStarted('mi') >= 8) return 7;
+            return quienEmpieza === 'rival' ? cupoStarter : 7;
+        }
         return 1;
+    };
+
+    const refreshStarterHighlight = () => {
+        document.getElementById('sectionMi')?.classList.toggle('is-starter', quienEmpieza === 'mi');
+        document.getElementById('sectionRival')?.classList.toggle('is-starter', quienEmpieza === 'rival');
+    };
+
+    const refreshHandCounts = () => {
+        const countMi = document.getElementById('countMi');
+        const countRival = document.getElementById('countRival');
+        const miMax = maxFor('mi');
+        const rivalMax = maxFor('rival');
+        if (countMi) {
+            countMi.textContent = `${countStarted('mi')}/${miMax}`;
+            countMi.title = quienEmpieza === 'mi'
+                ? `Vos empezás con ${cupoStarter}. Clic para alternar 7/8.`
+                : 'Clic para empezar vos (y elegir 7 u 8).';
+            countMi.setAttribute(
+                'aria-label',
+                `Tus cartas ${countStarted('mi')} de ${miMax}. Clic para empezar vos o alternar cupo.`
+            );
+            countMi.classList.toggle('is-active-starter', quienEmpieza === 'mi');
+        }
+        if (countRival) {
+            countRival.textContent = `${countStarted('rival')}/${rivalMax}`;
+            countRival.title = quienEmpieza === 'rival'
+                ? `El rival empieza con ${cupoStarter}. Clic para alternar 7/8.`
+                : 'Clic para que el rival empiece (y elegir su 7 u 8).';
+            countRival.setAttribute(
+                'aria-label',
+                `Rival ${countStarted('rival')} de ${rivalMax}. Clic para que empiece el rival o alternar cupo.`
+            );
+            countRival.classList.toggle('is-active-starter', quienEmpieza === 'rival');
+        }
+        refreshStarterHighlight();
+    };
+
+    const applyQuienYCupo = () => {
+        enforceMaxAndEmptySlot('mi', document.getElementById('pickersMiMano'));
+        enforceMaxAndEmptySlot('rival', document.getElementById('pickersRivalMano'));
+        refreshHandCounts();
+        refreshDetectedGroups('mi');
+        refreshDetectedGroups('rival');
+        refreshAllDuplicateGuards();
+    };
+
+    /** Clic en un contador: ese jugador empieza; si ya era él, toggle 8↔7. */
+    const onCupoCountClick = (quien) => {
+        playSound('click');
+        if (quienEmpieza === quien) {
+            cupoStarter = cupoStarter === 8 ? 7 : 8;
+        } else {
+            quienEmpieza = quien;
+            cupoStarter = 8;
+        }
+        applyQuienYCupo();
     };
 
     const bindPicker = (el) => {
@@ -1757,26 +1833,16 @@ function renderCustomDebugForm() {
         enforceMaxAndEmptySlot(group, container);
 
         if (group === 'mi') {
-            document.getElementById('countMi').textContent =
-                `${countStarted('mi')}/${maxFor('mi')}`;
             enforceMaxAndEmptySlot('rival', document.getElementById('pickersRivalMano'));
-            document.getElementById('countRival').textContent =
-                `${countStarted('rival')}/${maxFor('rival')}`;
-            document.getElementById('countMi').textContent =
-                `${countStarted('mi')}/${maxFor('mi')}`;
+            refreshHandCounts();
             refreshDetectedGroups('mi');
             refreshDetectedGroups('rival');
             refreshAllDuplicateGuards();
             return;
         }
         if (group === 'rival') {
-            document.getElementById('countRival').textContent =
-                `${countStarted('rival')}/${maxFor('rival')}`;
             enforceMaxAndEmptySlot('mi', document.getElementById('pickersMiMano'));
-            document.getElementById('countMi').textContent =
-                `${countStarted('mi')}/${maxFor('mi')}`;
-            document.getElementById('countRival').textContent =
-                `${countStarted('rival')}/${maxFor('rival')}`;
+            refreshHandCounts();
             refreshDetectedGroups('mi');
             refreshDetectedGroups('rival');
             refreshAllDuplicateGuards();
@@ -1795,6 +1861,14 @@ function renderCustomDebugForm() {
     bindPicker(document.querySelector('#pickersDescarte .card-picker'));
     document.getElementById('countMi').textContent = `0/${maxFor('mi')}`;
     document.getElementById('countRival').textContent = `0/${maxFor('rival')}`;
+    refreshHandCounts();
+
+    document.getElementById('countMi')?.addEventListener('click', () => {
+        onCupoCountClick('mi');
+    });
+    document.getElementById('countRival')?.addEventListener('click', () => {
+        onCupoCountClick('rival');
+    });
 
     document.getElementById('btnCustomBack').addEventListener('click', () => {
         playSound('click');
@@ -1807,6 +1881,9 @@ function renderCustomDebugForm() {
         showError('');
         const mazoRaw = document.getElementById('cfgMazoRestante').value.trim();
         const descarteSlots = collectSlots('descarte');
+        // Cupos = lo que muestra el contador (fuente de verdad del toggle)
+        const miCupo = maxFor('mi');
+        const rivalCupo = maxFor('rival');
         const config = {
             miManoSlots: collectSlots('mi'),
             rivalManoSlots: collectSlots('rival'),
@@ -1820,10 +1897,14 @@ function renderCustomDebugForm() {
             rivalGruposDetectados: collectGruposDetectados('rival'),
             mazoRestante: mazoRaw === '' ? null : Number(mazoRaw),
             permitirVictoriaColor: document.getElementById('cfgColor').checked,
-            permitirVictoriaPoker: document.getElementById('cfgPoker').checked
+            permitirVictoriaPoker: document.getElementById('cfgPoker').checked,
+            quienEmpieza,
+            cupoStarter: quienEmpieza === 'mi' ? miCupo : rivalCupo,
+            miCupoTotal: miCupo,
+            rivalCupoTotal: rivalCupo
         };
 
-        if (countStarted('mi') === 8 && countStarted('rival') === 8) {
+        if (miCupo === 8 && rivalCupo === 8) {
             showError('Solo uno puede tener 8 cartas.');
             return;
         }
@@ -2149,10 +2230,11 @@ function renderBoard() {
         cancelarDiscardMeldStaging();
     });
 
+    bindBotonMeldSelectPlus();
     actualizarEstadoBotones(puedeInteractuar);
 }
 
-/** Una sola carta seleccionada a la vez (clic y arrastre). */
+/** Hasta 2 cartas seleccionadas en la mano (clic); al arrastrar se deja una. */
 function idCartaIgual(a, b) {
     return String(a) === String(b);
 }
@@ -2169,20 +2251,85 @@ function sincronizarClasesSeleccionMano() {
 
 /**
  * @param {string|number} cardId
- * @param {{ toggleIfSame?: boolean, playSelectSound?: boolean }} [opts]
- * toggleIfSame: clic en la misma carta la deselecciona; al arrastrar no se usa.
+ * @param {{ toggleIfSame?: boolean, playSelectSound?: boolean, replace?: boolean }} [opts]
+ * toggleIfSame: clic en una ya seleccionada la quita.
+ * replace: deja solo esa carta (p. ej. al empezar un drag).
+ * Máx. 2 en mano; la 3ª saca la más antigua.
  */
 function establecerSeleccionCarta(cardId, opts = {}) {
-    const { toggleIfSame = false, playSelectSound = false } = opts;
+    const { toggleIfSame = false, playSelectSound = false, replace = false } = opts;
     const id = String(cardId);
-    if (toggleIfSame && cartasSeleccionadasIds.length === 1 && idCartaIgual(cartasSeleccionadasIds[0], id)) {
-        cartasSeleccionadasIds = [];
-    } else {
+
+    if (replace) {
         cartasSeleccionadasIds = [id];
+    } else if (toggleIfSame && cartasSeleccionadasIds.some(x => idCartaIgual(x, id))) {
+        cartasSeleccionadasIds = cartasSeleccionadasIds.filter(x => !idCartaIgual(x, id));
+    } else if (!cartasSeleccionadasIds.some(x => idCartaIgual(x, id))) {
+        cartasSeleccionadasIds = [...cartasSeleccionadasIds, id];
+        if (cartasSeleccionadasIds.length > 2) {
+            cartasSeleccionadasIds = cartasSeleccionadasIds.slice(1);
+        }
     }
+
     if (playSelectSound) playSound('select');
     sincronizarClasesSeleccionMano();
+    actualizarBotonMeldDesdeSeleccion();
     if (gameState?.esMiTurno) actualizarEstadoBotones(true);
+}
+
+/** 2 cartas de mano + tope de descarte = grupo válido en fase de robo. */
+function puedeBajarGrupoPorSeleccion() {
+    if (!gameState || gameState.juegoTerminado || victoriaRevealActive) return false;
+    if (!gameState.esMiTurno || gameState.faseActual !== 'ROBO') return false;
+    if (!gameState.descarteTop || stagingMeldActivo()) return false;
+    if (cartasSeleccionadasIds.length !== 2) return false;
+
+    const mano = miMano();
+    const c1 = mano.find(c => idCartaIgual(c.id, cartasSeleccionadasIds[0]));
+    const c2 = mano.find(c => idCartaIgual(c.id, cartasSeleccionadasIds[1]));
+    if (!c1 || !c2) return false;
+    return esGrupoValido([gameState.descarteTop, c1, c2]);
+}
+
+function actualizarBotonMeldDesdeSeleccion() {
+    const zone = document.getElementById('myMeldDropZone')
+        || document.querySelector('.player-dashboard .player-melds');
+    const btn = document.getElementById('btnMeldSelectPlus');
+    const show = puedeBajarGrupoPorSeleccion();
+
+    if (zone) {
+        zone.classList.toggle('has-meld-select-plus', show);
+        // Mantener zona usable en fase ROBO si ya estaba lista para drop
+        if (show) zone.classList.add('is-meld-drop-ready');
+    }
+    if (btn) {
+        btn.hidden = !show;
+        btn.disabled = !show;
+    }
+}
+
+function bajarGrupoPorSeleccion() {
+    if (!puedeBajarGrupoPorSeleccion()) return;
+    const ids = cartasSeleccionadasIds.map(String);
+    cartasSeleccionadasIds = [];
+    sincronizarClasesSeleccionMano();
+    actualizarBotonMeldDesdeSeleccion();
+    playSound('meld');
+    enviarAccion('ROBAR_DESCARTE', { cartasIds: ids }).then((res) => {
+        if (res?.ok) return;
+        if (screen === 'game' && gameState) render();
+    });
+}
+
+function bindBotonMeldSelectPlus() {
+    document.getElementById('btnMeldSelectPlus')?.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (ignorarClickTrasDrag) return;
+        playSound('click');
+        bajarGrupoPorSeleccion();
+    });
+    actualizarBotonMeldDesdeSeleccion();
 }
 
 function renderManoLocal(opts = {}) {
@@ -3081,12 +3228,26 @@ function onCardPointerMove(e) {
         if (indiceDestinoPreview !== indiceOrigenDrag) {
             indiceDestinoPreview = indiceOrigenDrag;
             limpiarSoloPreviewShift();
+        } else if (esViewportMovilMano()) {
+            limpiarOlaReordenMovil();
         }
         return;
     }
 
     const destIdx = indiceDestinoDesdePunto(e.clientX, e.clientY);
     if (destIdx == null) return;
+
+    // Móvil: imán inverso continuo según el dedo (no solo al cambiar de carta)
+    if (esViewportMovilMano()) {
+        if (destIdx === indiceOrigenDrag) {
+            indiceDestinoPreview = indiceOrigenDrag;
+            limpiarOlaReordenMovil();
+            return;
+        }
+        indiceDestinoPreview = destIdx;
+        aplicarImanInversoMano(e.clientX);
+        return;
+    }
 
     if (destIdx === indiceOrigenDrag) {
         // Volvió a su sitio: cancelar preview de vecinos
@@ -3174,9 +3335,9 @@ function iniciarArrastrePointer(e) {
     reordenYaAplicado = false;
     ignorarClickTrasDrag = false;
 
-    // Al mover: esa carta queda como la única seleccionada (mismo foco que el clic)
+    // Al mover: esa carta queda seleccionada (reemplaza multi-select del clic)
     if (gameState?.esMiTurno) {
-        establecerSeleccionCarta(pointerDrag.id, { toggleIfSame: false });
+        establecerSeleccionCarta(pointerDrag.id, { toggleIfSame: false, replace: true });
     }
 
     pointerDrag.dragging = true;
@@ -3193,6 +3354,11 @@ function iniciarArrastrePointer(e) {
     ghost.style.top = `${e.clientY}px`;
     document.body.appendChild(ghost);
     pointerDrag.ghost = ghost;
+
+    if (esViewportMovilMano()) {
+        capturarLayoutManoParaIman();
+        handCardsEl.classList.add('hand-magnet-active');
+    }
 
     document.body.classList.add('is-reordering-cards');
     if (puedeDescartarPorDrag()) {
@@ -3279,6 +3445,11 @@ function actualizarPreviewReorden(targetId) {
         return;
     }
 
+    // Móvil usa imán inverso en onCardPointerMove
+    if (esViewportMovilMano()) return;
+
+    limpiarOlaReordenMovil(handCardsEl);
+
     const tops = cards.map(c => c.getBoundingClientRect().top);
     const multilinea = tops.some(t => Math.abs(t - tops[0]) > 8);
 
@@ -3312,9 +3483,166 @@ function actualizarPreviewReorden(targetId) {
     });
 }
 
+/** Mismo breakpoint que el CSS móvil de la mano. */
+function esViewportMovilMano() {
+    return typeof window !== 'undefined'
+        && window.matchMedia('(max-width: 900px)').matches;
+}
+
+/** Layout base de la mano al iniciar drag (sin transforms), para el imán inverso. */
+let handMagnetLayout = null;
+
+function capturarLayoutManoParaIman() {
+    const handCardsEl = document.getElementById('handCards');
+    if (!handCardsEl) {
+        handMagnetLayout = null;
+        return;
+    }
+    const cards = [...handCardsEl.querySelectorAll('.card')];
+    handMagnetLayout = cards.map((c, index) => {
+        const r = c.getBoundingClientRect();
+        return {
+            id: String(c.dataset.id),
+            index,
+            centerX: r.left + r.width / 2,
+            width: r.width
+        };
+    });
+}
+
+function limpiarOlaReordenMovil(root = document.getElementById('handCards')) {
+    if (!root) return;
+    root.classList.remove('hand-magnet-active');
+    root.querySelectorAll('.card').forEach((c) => {
+        c.classList.remove(
+            'reorder-gap-neighbor',
+            'reorder-gap-neighbor-soft',
+            'reorder-gap-neighbor-edge',
+            'reorder-wave'
+        );
+        if (c.dataset.id === cartaArrastradaId) return;
+        if (!c.classList.contains('is-dragging')) {
+            c.style.transform = '';
+            c.style.zIndex = '';
+        }
+    });
+}
+
+/**
+ * Imán inverso: la carta del dedo empuja a las demás.
+ * Las dos del hueco se agrandan y se apartan; el resto se repele con caída suave.
+ */
+function aplicarImanInversoMano(fingerX) {
+    const handCardsEl = document.getElementById('handCards');
+    if (!handCardsEl || !cartaArrastradaId) return;
+    if (!handMagnetLayout?.length) capturarLayoutManoParaIman();
+    if (!handMagnetLayout?.length) return;
+
+    handCardsEl.classList.add('hand-magnet-active');
+
+    const others = handMagnetLayout.filter(s => s.id !== String(cartaArrastradaId));
+    if (!others.length) return;
+
+    const leftNeighbor = [...others]
+        .filter(s => s.centerX <= fingerX)
+        .sort((a, b) => b.centerX - a.centerX)[0] || null;
+    const rightNeighbor = [...others]
+        .filter(s => s.centerX > fingerX)
+        .sort((a, b) => a.centerX - b.centerX)[0] || null;
+
+    const atEnd = !rightNeighbor && !!leftNeighbor;
+    const atStart = !leftNeighbor && !!rightNeighbor;
+
+    const INFLUENCE = Math.max(72, (others[0]?.width || 52) * 2.2);
+    const PUSH_MAX = atEnd || atStart ? 22 : 18;
+    const SCALE_GAP = 1.4;
+    const SCALE_SOFT = 1.2;
+
+    const softIds = new Set();
+    if (leftNeighbor) {
+        const softL = others.filter(s => s.centerX < leftNeighbor.centerX)
+            .sort((a, b) => b.centerX - a.centerX)[0];
+        if (softL) softIds.add(softL.id);
+    }
+    if (rightNeighbor) {
+        const softR = others.filter(s => s.centerX > rightNeighbor.centerX)
+            .sort((a, b) => a.centerX - b.centerX)[0];
+        if (softR) softIds.add(softR.id);
+    }
+
+    const cardsById = new Map(
+        [...handCardsEl.querySelectorAll('.card')].map(c => [String(c.dataset.id), c])
+    );
+
+    for (const slot of others) {
+        const el = cardsById.get(slot.id);
+        if (!el || el.classList.contains('is-dragging')) continue;
+
+        const dx = slot.centerX - fingerX;
+        const dist = Math.abs(dx);
+        // Caída suave (no lineal): cerca del dedo empuja fuerte; lejos casi nada
+        const t = Math.max(0, 1 - dist / INFLUENCE);
+        const influence = t * t * (3 - 2 * t); // smoothstep
+
+        let dir = dx > 0.5 ? 1 : dx < -0.5 ? -1 : 0;
+        if (dir === 0) {
+            if (atEnd) dir = -1;
+            else if (atStart) dir = 1;
+            else dir = slot.index >= (indiceOrigenDrag ?? 0) ? 1 : -1;
+        }
+
+        // En el extremo: el imán “echa” al resto hacia el lado libre
+        let pushScale = 1;
+        if (atEnd && dir < 0) pushScale = 1.15;
+        if (atStart && dir > 0) pushScale = 1.15;
+
+        let tx = dir * PUSH_MAX * influence * pushScale;
+        let scale = 1 + 0.12 * influence;
+        let z = 3;
+        let role = 'none';
+
+        const isLeftGap = leftNeighbor && slot.id === leftNeighbor.id;
+        const isRightGap = rightNeighbor && slot.id === rightNeighbor.id;
+
+        if (isLeftGap || isRightGap) {
+            const gapBoost = atEnd || atStart ? 0.85 : 1;
+            scale = 1 + (SCALE_GAP - 1) * Math.max(influence, 0.55) * gapBoost;
+            if (atEnd || atStart) scale = Math.min(scale, 1.28);
+            tx = dir * (PUSH_MAX * 0.55 + 14 * Math.max(influence, 0.4));
+            z = 8;
+            role = (atEnd || atStart) ? 'edge' : 'gap';
+        } else if (softIds.has(slot.id)) {
+            scale = 1 + (SCALE_SOFT - 1) * Math.max(influence, 0.35);
+            tx = dir * (PUSH_MAX * 0.7 * Math.max(influence, 0.3) + 4);
+            z = 6;
+            role = 'soft';
+        }
+
+        if (role === 'none' && influence < 0.03) {
+            el.classList.remove(
+                'reorder-gap-neighbor',
+                'reorder-gap-neighbor-soft',
+                'reorder-gap-neighbor-edge',
+                'reorder-wave'
+            );
+            el.style.transform = '';
+            el.style.zIndex = '';
+            continue;
+        }
+
+        el.classList.add('reorder-wave');
+        el.classList.toggle('reorder-gap-neighbor', role === 'gap');
+        el.classList.toggle('reorder-gap-neighbor-soft', role === 'soft');
+        el.classList.toggle('reorder-gap-neighbor-edge', role === 'edge');
+        el.style.zIndex = String(z);
+        el.style.transform = `translateX(${tx.toFixed(2)}px) scale(${scale.toFixed(3)})`;
+    }
+}
+
 function limpiarSoloPreviewShift() {
     const handCardsEl = document.getElementById('handCards');
     if (!handCardsEl) return;
+    limpiarOlaReordenMovil(handCardsEl);
     handCardsEl.querySelectorAll('.card').forEach(c => {
         if (c.dataset.id === cartaArrastradaId) return;
         c.classList.remove('card-shifting', 'drag-over');
@@ -3325,11 +3653,22 @@ function limpiarSoloPreviewShift() {
 function limpiarPreviewReorden() {
     const handCardsEl = document.getElementById('handCards');
     if (!handCardsEl) return;
+    limpiarOlaReordenMovil(handCardsEl);
+    handMagnetLayout = null;
     handCardsEl.querySelectorAll('.card').forEach(c => {
-        c.classList.remove('card-shifting', 'drag-over', 'is-dragging');
+        c.classList.remove(
+            'card-shifting',
+            'drag-over',
+            'is-dragging',
+            'reorder-gap-neighbor',
+            'reorder-gap-neighbor-soft',
+            'reorder-gap-neighbor-edge',
+            'reorder-wave'
+        );
         c.style.transform = '';
         c.style.transition = '';
         c.style.pointerEvents = '';
+        c.style.zIndex = '';
     });
 }
 

@@ -188,6 +188,32 @@ body {
     margin-left: 0.35rem;
 }
 
+button.custom-hand-count-toggle {
+    appearance: none;
+    border: 1px solid transparent;
+    background: rgba(255, 255, 255, 0.04);
+    border-radius: 999px;
+    padding: 0.12rem 0.45rem;
+    cursor: pointer;
+    font: inherit;
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: var(--text-secondary);
+    transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+}
+
+button.custom-hand-count-toggle:hover {
+    color: var(--text-primary);
+    border-color: var(--border-color);
+    background: rgba(255, 255, 255, 0.08);
+}
+
+button.custom-hand-count-toggle.is-active-starter {
+    color: var(--text-primary);
+    border-color: rgba(167, 139, 250, 0.65);
+    background: rgba(167, 139, 250, 0.18);
+}
+
 .card-picker-grid-single {
     margin-bottom: 0;
 }
@@ -331,6 +357,19 @@ body {
     border-radius: 14px;
     padding: 1rem;
     background: rgba(255, 255, 255, 0.02);
+    transition:
+        border-color 0.2s ease,
+        box-shadow 0.2s ease,
+        background 0.2s ease;
+}
+
+.custom-debug-section.is-starter {
+    border-color: rgba(167, 139, 250, 0.55);
+    background: rgba(167, 139, 250, 0.07);
+    box-shadow:
+        0 0 0 1px rgba(167, 139, 250, 0.2),
+        0 10px 28px rgba(0, 0, 0, 0.28),
+        inset 0 -3px 0 rgba(167, 139, 250, 0.55);
 }
 
 .custom-debug-section h2 {
@@ -1277,7 +1316,8 @@ body:has(.game-container) {
 }
 
 .player-dashboard .player-melds.is-meld-drop-ready,
-.player-dashboard .player-melds.has-staging {
+.player-dashboard .player-melds.has-staging,
+.player-dashboard .player-melds.has-meld-select-plus {
     display: flex;
     min-height: 4.75rem;
     align-items: center;
@@ -1288,6 +1328,42 @@ body:has(.game-container) {
     background: rgba(0, 0, 0, 0.12);
     box-sizing: border-box;
     transition: border-color 0.15s ease, background 0.15s ease, box-shadow 0.15s ease;
+}
+
+.btn-meld-select-plus {
+    flex: 0 0 auto;
+    width: 1.55rem;
+    height: 1.55rem;
+    min-width: 1.55rem;
+    padding: 0;
+    margin: 0.15rem;
+    border-radius: 999px;
+    border: 1.5px solid rgba(46, 180, 100, 0.85);
+    background: rgba(40, 160, 90, 0.92);
+    color: #fff;
+    font-size: 1.15rem;
+    font-weight: 700;
+    line-height: 1;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    box-shadow: 0 2px 8px rgba(30, 120, 70, 0.35);
+    transition: transform 0.15s ease, filter 0.15s ease, box-shadow 0.15s ease;
+}
+
+.btn-meld-select-plus:hover {
+    filter: brightness(1.08);
+    transform: scale(1.08);
+    box-shadow: 0 3px 12px rgba(30, 140, 80, 0.45);
+}
+
+.btn-meld-select-plus:active {
+    transform: scale(0.96);
+}
+
+.btn-meld-select-plus[hidden] {
+    display: none !important;
 }
 
 .player-dashboard .player-melds.is-meld-drop-ready.is-drop-hot {
@@ -1604,9 +1680,13 @@ body:has(.game-container) {
     transition: transform 0.22s cubic-bezier(0.22, 1, 0.36, 1);
 }
 
+/* Origen invisible al arrastrar, pero el hueco/slot se conserva */
 .hand-cards-container .card.is-dragging {
-    opacity: 0.45;
-    z-index: 2;
+    visibility: hidden;
+    opacity: 0;
+    pointer-events: none;
+    box-shadow: none;
+    /* no cambiar width/flex/margin: el espacio queda reservado */
 }
 
 .hand-cards-container .card.just-drawn-from-deck {
@@ -2322,8 +2402,11 @@ body.is-drawing-from-deck {
     cursor: grab;
 }
 
+/* Mazo: fantasma al cursor; el dorso de origen no se ve semi-transparente */
 #deckPile.deck-draggable.is-dragging {
-    opacity: 0.45;
+    visibility: hidden;
+    opacity: 0;
+    pointer-events: none;
 }
 
 .hand-cards-container.hand-drop-ready {
@@ -2686,10 +2769,44 @@ body.is-drawing-from-deck {
         padding: 0.2rem;
         margin-left: -14px;
         border-radius: 8px;
+        transform-origin: center bottom;
+        transition:
+            transform 0.32s cubic-bezier(0.22, 0.61, 0.36, 1),
+            box-shadow 0.32s cubic-bezier(0.22, 0.61, 0.36, 1);
+    }
+
+    .hand-cards-container.hand-magnet-active .card:not(.is-dragging) {
+        transition:
+            transform 0.34s cubic-bezier(0.2, 0.7, 0.2, 1),
+            box-shadow 0.34s ease;
     }
 
     .hand-cards-container .card:first-child {
         margin-left: 0;
+    }
+
+    /* Imán inverso: énfasis visual; el movimiento va en transform inline */
+    .hand-cards-container .card.reorder-wave {
+        position: relative;
+        will-change: transform;
+    }
+
+    .hand-cards-container .card.reorder-gap-neighbor {
+        box-shadow:
+            0 0 0 1.5px rgba(167, 139, 250, 0.5),
+            0 8px 18px rgba(0, 0, 0, 0.36);
+    }
+
+    .hand-cards-container .card.reorder-gap-neighbor-soft {
+        box-shadow:
+            0 0 0 1px rgba(167, 139, 250, 0.3),
+            0 4px 12px rgba(0, 0, 0, 0.26);
+    }
+
+    .hand-cards-container .card.reorder-gap-neighbor-edge {
+        box-shadow:
+            0 0 0 1.5px rgba(167, 139, 250, 0.4),
+            0 6px 14px rgba(0, 0, 0, 0.3);
     }
 
     .hand-cards-container .card-value {

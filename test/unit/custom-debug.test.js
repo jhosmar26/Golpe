@@ -67,6 +67,85 @@ describe('custom debug', () => {
         assert.equal(game.jugadores[1].mano.length, 7);
     });
 
+    it('con miCupoTotal 7 empieza con 7 y el rival con 8', () => {
+        const game = new GolpeadoGame();
+        game.inicializarJuego(['Yo', 'Bot']);
+        const res = aplicarEscenarioCustom(game, {
+            miMano: 'H1 H2 H3',
+            rivalMano: 'C2 D4',
+            descarteTop: 'S13',
+            miCupoTotal: 7
+        });
+        assert.equal(res.ok, true, res.error);
+        assert.equal(game.jugadores[0].mano.length, 7);
+        assert.equal(game.jugadores[1].mano.length, 8);
+        assert.equal(game.turnoActual, 1);
+        assert.equal(game.faseActual, 'DESCARTE');
+    });
+
+    it('quienEmpieza mi + cupoStarter 7: vos 7, rival 7, tu turno robo', () => {
+        const game = new GolpeadoGame();
+        game.inicializarJuego(['Yo', 'Bot']);
+        const res = aplicarEscenarioCustom(game, {
+            quienEmpieza: 'mi',
+            cupoStarter: 7
+        });
+        assert.equal(res.ok, true, res.error);
+        assert.equal(game.jugadores[0].mano.length, 7);
+        assert.equal(game.jugadores[1].mano.length, 7);
+        assert.equal(game.turnoActual, 0);
+        assert.equal(game.faseActual, 'ROBO');
+    });
+
+    it('quienEmpieza rival + cupoStarter 8: vos 7, rival 8, turno rival', () => {
+        const game = new GolpeadoGame();
+        game.inicializarJuego(['Yo', 'Bot']);
+        const res = aplicarEscenarioCustom(game, {
+            quienEmpieza: 'rival',
+            cupoStarter: 8
+        });
+        assert.equal(res.ok, true, res.error);
+        assert.equal(game.jugadores[0].mano.length, 7);
+        assert.equal(game.jugadores[1].mano.length, 8);
+        assert.equal(game.turnoActual, 1);
+        assert.equal(game.faseActual, 'DESCARTE');
+    });
+
+    it('quienEmpieza rival reparte 7+8 y turno del rival', () => {
+        const game = new GolpeadoGame();
+        game.inicializarJuego(['Yo', 'Bot']);
+        const res = aplicarEscenarioCustom(game, {
+            quienEmpieza: 'rival'
+        });
+        assert.equal(res.ok, true, res.error);
+        assert.equal(game.jugadores[0].mano.length, 7);
+        assert.equal(game.jugadores[1].mano.length, 8);
+        assert.equal(game.turnoActual, 1);
+        assert.equal(game.faseActual, 'DESCARTE');
+    });
+
+    it('quienEmpieza mi reparte 8+7 y tu turno', () => {
+        const game = new GolpeadoGame();
+        game.inicializarJuego(['Yo', 'Bot']);
+        const res = aplicarEscenarioCustom(game, {
+            quienEmpieza: 'mi'
+        });
+        assert.equal(res.ok, true, res.error);
+        assert.equal(game.jugadores[0].mano.length, 8);
+        assert.equal(game.jugadores[1].mano.length, 7);
+        assert.equal(game.turnoActual, 0);
+        assert.equal(game.faseActual, 'DESCARTE');
+    });
+
+    it('vacío con miCupoTotal 7 reparte 7+8', () => {
+        const game = new GolpeadoGame();
+        game.inicializarJuego(['Yo', 'Bot']);
+        const res = aplicarEscenarioCustom(game, { miCupoTotal: 7 });
+        assert.equal(res.ok, true, res.error);
+        assert.equal(game.jugadores[0].mano.length, 7);
+        assert.equal(game.jugadores[1].mano.length, 8);
+    });
+
     it('permite rival con 8 si vos tenés 7 o menos', () => {
         const game = new GolpeadoGame();
         game.inicializarJuego(['Yo', 'Bot']);

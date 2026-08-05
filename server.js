@@ -497,7 +497,9 @@ io.on('connection', (socket) => {
 
         const cfg = config || {};
         const slotsInfo = Array.isArray(cfg.miManoSlots) ? cfg.miManoSlots.length : 0;
-        console.log(`[Sala ${code}] custom slots mi=${slotsInfo} texto="${String(cfg.miMano || '').slice(0, 80)}"`);
+        console.log(
+            `[Sala ${code}] custom slots mi=${slotsInfo} quien=${cfg.quienEmpieza || '?'} miCupo=${cfg.miCupoTotal ?? '?'} rivalCupo=${cfg.rivalCupoTotal ?? '?'} starter=${cfg.cupoStarter ?? '?'}`
+        );
 
         const aplicado = aplicarEscenarioCustom(room.game, cfg);
         if (!aplicado.ok) {

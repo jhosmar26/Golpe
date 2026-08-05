@@ -159,7 +159,8 @@ function manoIds(codes) {
  * value/suit null = comodín (aleatorio con esa restricción).
  */
 export function normalizarSlotsMano(configSlots, textoFallback = '') {
-    if (Array.isArray(configSlots) && configSlots.length) {
+    // Array vacío = sin cartas pedidas (no caer al texto fallback)
+    if (Array.isArray(configSlots)) {
         return configSlots.map((s) => ({
             suit: s?.suit && s.suit !== '?' ? String(s.suit).toUpperCase() : null,
             value: s?.value != null && s.value !== '?' && s.value !== ''
@@ -603,23 +604,66 @@ export function aplicarEscenarioCustom(game, config = {}) {
 
         const hayMesa = miMesaCount > 0 || rivalMesaCount > 0;
 
-        if (miTotal() === 0 && rivalTotal() === 0) {
-            miMano = takeRandom(8);
-            rivalMano = takeRandom(7);
-        } else if (hayMesa) {
-            // Custom con grupos bajados = mitad de partida: ambos a total 7
+        const parseCupo = (raw) => {
+            const n = Number(raw);
+            return n === 7 || n === 8 ? n : null;
+        };
+
+        let yoEmpieza = true;
+        if (config.quienEmpieza === 'rival') yoEmpieza = false;
+        else if (config.quienEmpieza === 'mi') yoEmpieza = true;
+
+        let cupoStarter = Number(config.cupoStarter);
+        if (cupoStarter !== 7 && cupoStarter !== 8) cupoStarter = null;
+
+        let miCupo = parseCupo(config.miCupoTotal);
+        let rivalCupo = parseCupo(config.rivalCupoTotal);
+
+        if (miCupo == null || rivalCupo == null) {
+            if (config.quienEmpieza === 'mi' || config.quienEmpieza === 'rival' || cupoStarter != null) {
+                const starter = cupoStarter ?? 8;
+                miCupo = miCupo ?? (yoEmpieza ? starter : 7);
+                rivalCupo = rivalCupo ?? (yoEmpieza ? 7 : starter);
+            } else if (miTotal() === 8 && rivalTotal() < 8) {
+                miCupo = miCupo ?? 8;
+                rivalCupo = rivalCupo ?? 7;
+            } else if (rivalTotal() === 8 && miTotal() < 8) {
+                miCupo = miCupo ?? 7;
+                rivalCupo = rivalCupo ?? 8;
+                yoEmpieza = false;
+            } else if (miCupo === 7 && rivalCupo == null) {
+                // Legacy: solo miCupoTotal: 7 → vos 7, rival 8
+                rivalCupo = 8;
+                yoEmpieza = false;
+            } else {
+                miCupo = miCupo ?? 8;
+                rivalCupo = rivalCupo ?? 7;
+            }
+        }
+
+        if (cupoStarter == null) {
+            cupoStarter = yoEmpieza ? miCupo : rivalCupo;
+        }
+
+        /** Recorta o completa la mano hasta el cupo pedido. */
+        const ajustarManoACupo = (mano, mesaCount, target) => {
+            const maxMano = Math.max(0, target - mesaCount);
+            if (mano.length > maxMano) return mano.slice(0, maxMano);
+            return padManoHastaTotal(mano, mesaCount, target);
+        };
+
+        if (hayMesa) {
             if (miTotal() > 7 || rivalTotal() > 7) {
                 throw new Error('Con grupos en mesa el total (mano+mesa) no puede superar 7 por jugador.');
             }
-            miMano = padManoHastaTotal(miMano, miMesaCount, 7);
-            rivalMano = padManoHastaTotal(rivalMano, rivalMesaCount, 7);
-        } else if (miTotal() === 8) {
-            rivalMano = padManoHastaTotal(rivalMano, rivalMesaCount, 7);
-        } else if (rivalTotal() === 8) {
-            miMano = padManoHastaTotal(miMano, miMesaCount, 7);
+            miMano = ajustarManoACupo(miMano, miMesaCount, 7);
+            rivalMano = ajustarManoACupo(rivalMano, rivalMesaCount, 7);
         } else {
-            miMano = padManoHastaTotal(miMano, miMesaCount, 8);
-            rivalMano = padManoHastaTotal(rivalMano, rivalMesaCount, 7);
+            if (miCupo === 8 && rivalCupo === 8) {
+                throw new Error('Solo uno puede tener 8 cartas.');
+            }
+            miMano = ajustarManoACupo(miMano, miMesaCount, miCupo);
+            rivalMano = ajustarManoACupo(rivalMano, rivalMesaCount, rivalCupo);
         }
 
         if (!descarteTop) {
@@ -661,10 +705,20 @@ export function aplicarEscenarioCustom(game, config = {}) {
         const partidaConMesa = cartasEnMesa(yo.gruposExpuestos) > 0
             || cartasEnMesa(rival.gruposExpuestos) > 0;
 
+        const quienExplicit = config.quienEmpieza === 'mi'
+            || config.quienEmpieza === 'rival'
+            || Number(config.cupoStarter) === 7
+            || Number(config.cupoStarter) === 8
+            || Number(config.miCupoTotal) === 7
+            || Number(config.miCupoTotal) === 8;
+
         if (partidaConMesa) {
-            // Mitad de partida: se puede robar/descartar con total 7
             game.turnoActual = 0;
             game.faseActual = 'ROBO';
+        } else if (quienExplicit) {
+            game.turnoActual = yoEmpieza ? 0 : 1;
+            // Con 8: fase descarte; con 7: ambos a 7 → fase robo
+            game.faseActual = cupoStarter === 8 ? 'DESCARTE' : 'ROBO';
         } else if (yoTotal === 8) {
             game.turnoActual = 0;
             game.faseActual = 'DESCARTE';
@@ -676,8 +730,9 @@ export function aplicarEscenarioCustom(game, config = {}) {
             game.faseActual = 'ROBO';
         }
 
+        const empiezaLabel = `${game.turnoActual === 0 ? 'vos' : 'rival'}(${game.turnoActual === 0 ? yoTotal : rivalTotalFinal})`;
         game.log('[Debug] Escenario Custom cargado.');
-        game.log(`[Debug] Color=${permitirColor ? 'on' : 'off'}, Póker=${permitirPoker ? 'on' : 'off'}, mazo=${game.mazoRobo.length}.`);
+        game.log(`[Debug] Empieza=${empiezaLabel}, Color=${permitirColor ? 'on' : 'off'}, Póker=${permitirPoker ? 'on' : 'off'}, mazo=${game.mazoRobo.length}.`);
         game.log(`[Debug] Mano vos: ${miMano.map(c => c.label + c.suitLabel).join(' ')}`);
 
         const activo = game.jugadores[game.turnoActual];
