@@ -250,6 +250,9 @@ body {
     line-height: 1;
     cursor: pointer;
     transition: background 0.15s ease;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
 }
 
 .card-picker-suit:hover {
@@ -1199,32 +1202,13 @@ body:has(.game-container) {
     display: flex;
 }
 
-/* Grupos en mesa: mismo tamaño, solo índice (número + palo) */
+/* Grupos en mesa: mismo componente, en tamaño compacto */
 .meld-cards .card {
     width: 48px;
     height: 70px;
     padding: 0.2rem;
     border-radius: 7px;
     box-shadow: var(--shadow-sm);
-    justify-content: center;
-    align-items: center;
-}
-
-.meld-cards .card-center,
-.meld-cards .card-bottom {
-    display: none;
-}
-
-.meld-cards .card-top {
-    flex: 1;
-    width: 100%;
-    height: 100%;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    gap: 0.08rem;
-    line-height: 1;
 }
 
 .meld-cards .card-value {
@@ -1524,7 +1508,8 @@ body:has(.game-container) {
     max-height: min(40dvh, 280px);
 }
 
-/* Cartas Físicas */
+/* Cartas Físicas: un único componente (mano, descarte y grupos en mesa).
+   Solo muestra el índice: número + palo, centrado. */
 .card {
     position: relative;
     width: 100px;
@@ -1536,7 +1521,8 @@ body:has(.game-container) {
     cursor: pointer;
     display: flex;
     flex-direction: column;
-    justify-content: space-between;
+    align-items: center;
+    justify-content: center;
     padding: 0.6rem;
     transition: transform var(--transition-normal), box-shadow var(--transition-normal);
     user-select: none;
@@ -1552,32 +1538,50 @@ body:has(.game-container) {
 }
 
 .card-top {
+    flex: 1;
+    width: 100%;
+    height: 100%;
     display: flex;
     flex-direction: column;
-    line-height: 1.1;
+    align-items: center;
+    justify-content: center;
+    gap: 0.08rem;
+    line-height: 1;
 }
 
 .card-value {
-    font-size: 1.4rem;
-    font-weight: 700;
+    font-size: 1.6rem;
+    font-weight: 800;
 }
 
 .card-suit-mini {
-    font-size: 1rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.35rem;
+    line-height: 1;
 }
 
-.card-center {
-    font-size: 2.5rem;
-    align-self: center;
-    margin-bottom: 0.2rem;
+.suit-svg {
+    display: block;
+    width: 1em;
+    height: 1em;
+    flex-shrink: 0;
 }
 
-.card-bottom {
-    display: flex;
-    flex-direction: column;
-    align-self: flex-end;
-    transform: rotate(180deg);
-    line-height: 1.1;
+.suit-svg-mini {
+    width: 0.85em;
+    height: 0.85em;
+}
+
+.suit-svg-picker {
+    width: 1.15em;
+    height: 1.15em;
+}
+
+.card-suit-fallback {
+    font-size: 0.85em;
+    font-weight: 700;
 }
 
 /* Dorso de la Carta (Mazo de Robo) */
@@ -1945,7 +1949,10 @@ body:has(.game-container) {
 }
 
 .result-mini-suit {
-    font-size: 0.7rem;
+    display: inline-flex;
+    align-items: center;
+    font-size: 0.85rem;
+    line-height: 1;
 }
 
 .result-empty {
@@ -2413,15 +2420,11 @@ body.is-drawing-from-deck {
     }
 
     .card-value {
-        font-size: 0.9rem;
+        font-size: 1.05rem;
     }
 
     .card-suit-mini {
-        font-size: 0.7rem;
-    }
-
-    .card-center {
-        font-size: 1.2rem;
+        font-size: 0.92rem;
     }
 
     .player-dashboard {
@@ -2499,15 +2502,11 @@ body.is-drawing-from-deck {
     }
 
     .hand-cards-container .card-value {
-        font-size: 0.78rem;
+        font-size: 1rem;
     }
 
     .hand-cards-container .card-suit-mini {
-        font-size: 0.62rem;
-    }
-
-    .hand-cards-container .card-center {
-        font-size: 1.05rem;
+        font-size: 0.88rem;
     }
 
     .hand-cards-container .interactive-card.selected {

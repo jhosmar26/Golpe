@@ -1181,8 +1181,12 @@ function renderCustomDebugForm() {
     const applySuitVisual = (btn, suitKey) => {
         const next = suitCycle.find(s => s.key === suitKey) || suitCycle[suitCycle.length - 1];
         btn.dataset.suit = next.key;
-        btn.textContent = next.label;
+        btn.title = next.key === '?' ? 'Palo aleatorio' : next.label;
+        btn.setAttribute('aria-label', `Palo ${next.label}`);
         btn.className = `card-picker-suit ${next.cls}`;
+        btn.innerHTML = next.key === '?'
+            ? '?'
+            : renderSuitSvgHtml(next.key, 'suit-svg-picker');
     };
 
     /** Códigos completos ya usados (palo+valor), excluyendo un picker. */
@@ -1292,9 +1296,7 @@ function renderCustomDebugForm() {
             const s = pickerEl.querySelector('.card-picker-suit');
             if (r) r.value = '?';
             if (s) {
-                s.dataset.suit = '?';
-                s.textContent = '?';
-                s.className = 'card-picker-suit suit-random';
+                applySuitVisual(s, '?');
             }
             refreshRankOptions(pickerEl);
         };
@@ -2137,21 +2139,38 @@ function solicitarDescartar() {
     enviarAccion('DESCARTAR', { cartaId });
 }
 
+/** SVG de palo (corazones, diamantes, tréboles, picas). Usa currentColor. */
+function renderSuitSvgHtml(suit, extraClass = '') {
+    const cls = `suit-svg ${extraClass}`.trim();
+    const common = `class="${cls}" viewBox="0 0 24 24" width="1em" height="1em" aria-hidden="true" focusable="false"`;
+    switch (String(suit || '').toUpperCase()) {
+        case 'H':
+            // Corazón
+            return `<svg ${common}><path fill="currentColor" d="M12 21.35 10.55 20.03C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/></svg>`;
+        case 'D':
+            // Diamante
+            return `<svg ${common}><path fill="currentColor" d="M12 2.4 21.2 12 12 21.6 2.8 12z"/></svg>`;
+        case 'C':
+            // Trébol: tres lóbulos + pie (formas explícitas, legibles en tamaño chico)
+            return `<svg ${common}><circle cx="12" cy="6.1" r="3.55" fill="currentColor"/><circle cx="7.05" cy="12.15" r="3.55" fill="currentColor"/><circle cx="16.95" cy="12.15" r="3.55" fill="currentColor"/><path fill="currentColor" d="M10.55 14.6h2.9v4.35c0 .7.4 1.15 1.15 1.45-.9.2-1.95.3-3 .3s-2.1-.1-3-.3c.75-.3 1.15-.75 1.15-1.45V14.6z"/></svg>`;
+        case 'S':
+            // Pica: punta arriba (como corazón invertido) + pie
+            return `<svg ${common}><path fill="currentColor" d="M12 2C8.6 7.2 4.5 11.2 4.5 15a4.4 4.4 0 0 0 7.15 3.45V21H9.2v1.6h5.6V21h-2.45v-2.55A4.4 4.4 0 0 0 19.5 15c0-3.8-4.1-7.8-7.5-13z"/></svg>`;
+        default:
+            return `<span class="card-suit-fallback">${escapeHtml(suit || '?')}</span>`;
+    }
+}
+
 function renderCardHtml(card, interactive = false, selected = false, justDrawn = false, winShine = false) {
     const classInteractive = interactive ? 'interactive-card' : '';
     const classSelected = selected ? 'selected' : '';
     const classDrawn = justDrawn ? 'just-drawn-from-deck' : '';
     const classWin = winShine ? 'win-shine' : '';
     return `
-        <div class="card ${card.color} ${classInteractive} ${classSelected} ${classDrawn} ${classWin}" data-id="${card.id}">
+        <div class="card ${card.color} ${classInteractive} ${classSelected} ${classDrawn} ${classWin}" data-id="${card.id}" data-suit="${escapeAttr(card.suit || '')}">
             <div class="card-top">
-                <span class="card-value">${card.label}</span>
-                <span class="card-suit-mini">${card.suitLabel}</span>
-            </div>
-            <div class="card-center">${card.suitLabel}</div>
-            <div class="card-bottom">
-                <span class="card-value">${card.label}</span>
-                <span class="card-suit-mini">${card.suitLabel}</span>
+                <span class="card-value">${escapeHtml(card.label)}</span>
+                <span class="card-suit-mini" title="${escapeAttr(card.suitLabel || '')}">${renderSuitSvgHtml(card.suit)}</span>
             </div>
         </div>
     `;
@@ -2161,7 +2180,7 @@ function renderMiniCardHtml(card) {
     return `
         <span class="result-mini-card ${card.color || ''}" title="${escapeAttr((card.label || '') + (card.suitLabel || ''))}">
             <span class="result-mini-value">${escapeHtml(card.label || '')}</span>
-            <span class="result-mini-suit">${escapeHtml(card.suitLabel || '')}</span>
+            <span class="result-mini-suit">${renderSuitSvgHtml(card.suit, 'suit-svg-mini')}</span>
         </span>
     `;
 }
