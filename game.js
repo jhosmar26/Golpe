@@ -499,7 +499,9 @@ export class GolpeadoGame {
         const cartaDescarte = this.mazoDescarte[this.mazoDescarte.length - 1];
 
         // Validar que se seleccionaron cartas para hacer combinación
-        const cartasManoAsociadas = jugador.mano.filter(c => cartasAsociadasIds.includes(c.id));
+        const cartasManoAsociadas = jugador.mano.filter(c =>
+            cartasAsociadasIds.some(id => String(id) === String(c.id))
+        );
         const grupoPropuesto = [cartaDescarte, ...cartasManoAsociadas];
 
         if (!esGrupoValido(grupoPropuesto)) {

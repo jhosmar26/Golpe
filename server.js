@@ -5,17 +5,26 @@
 
 import express from 'express';
 import http from 'http';
+import https from 'https';
+import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { Server } from 'socket.io';
+import selfsigned from 'selfsigned';
 import { GolpeadoGame } from './game.js';
 import { jugarTurnoBot } from './bot.js';
 import { aplicarEscenarioDebug, aplicarEscenarioCustom, listarIdsEscenarios } from './debug-scenarios.js';
+import {
+    nombreYaUsadoEnSala,
+    sugerirNombresAlternativos,
+    normalizarNombreJugador
+} from './lobby-names.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const PORT = process.env.PORT || 3080;
+const HTTPS_PORT = process.env.HTTPS_PORT || 3443;
 const HOST = process.env.HOST || '0.0.0.0';
 const LOBBY_MIN = 2;
 const LOBBY_MAX = 6;
@@ -23,16 +32,63 @@ const BOT_NOMBRES = ['Bot Ana', 'Bot Luis', 'Bot Sofía', 'Bot Diego', 'Bot Mart
 /** Tiempo para volver a la partida tras minimizar el navegador / cortar red. */
 const RECONNECT_GRACE_MS = 3 * 60 * 1000;
 
+async function asegurarCertificadosHttps() {
+    const dir = path.join(__dirname, 'certs');
+    const keyPath = path.join(dir, 'key.pem');
+    const certPath = path.join(dir, 'cert.pem');
+    if (fs.existsSync(keyPath) && fs.existsSync(certPath)) {
+        return {
+            key: fs.readFileSync(keyPath),
+            cert: fs.readFileSync(certPath)
+        };
+    }
+    fs.mkdirSync(dir, { recursive: true });
+    const notBefore = new Date();
+    const notAfter = new Date(notBefore);
+    notAfter.setFullYear(notAfter.getFullYear() + 1);
+    const pems = await selfsigned.generate(
+        [{ name: 'commonName', value: 'golpeado.local' }],
+        {
+            keySize: 2048,
+            algorithm: 'sha256',
+            notBeforeDate: notBefore,
+            notAfterDate: notAfter,
+            extensions: [
+                {
+                    name: 'subjectAltName',
+                    altNames: [
+                        { type: 2, value: 'localhost' },
+                        { type: 7, ip: '127.0.0.1' }
+                    ]
+                }
+            ]
+        }
+    );
+    fs.writeFileSync(keyPath, pems.private, 'utf8');
+    fs.writeFileSync(certPath, pems.cert, 'utf8');
+    console.log('[HTTPS] Certificado local creado en /certs (solo desarrollo).');
+    return { key: pems.private, cert: pems.cert };
+}
+
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server, {
+const httpsCreds = await asegurarCertificadosHttps();
+const httpsServer = https.createServer(httpsCreds, app);
+const io = new Server({
     cors: {
         origin: true,
         methods: ['GET', 'POST']
     }
 });
+io.attach(server);
+io.attach(httpsServer);
 
 app.set('trust proxy', 1);
+app.use((req, res, next) => {
+    // Chrome Android: permitir Vibration API en esta origen
+    res.setHeader('Permissions-Policy', 'vibrate=*');
+    next();
+});
 app.use(express.static(__dirname));
 
 /** @type {Map<string, object>} */
@@ -209,7 +265,7 @@ io.on('connection', (socket) => {
     console.log(`[+] Conectado: ${socket.id}`);
 
     socket.on('createRoom', ({ nombre, sessionId } = {}, ack) => {
-        const nombreLimpio = String(nombre || '').trim() || 'Anfitrión';
+        const nombreLimpio = normalizarNombreJugador(nombre, 'Anfitrión');
         const code = generarCodigoSala();
         const room = {
             code,
@@ -250,7 +306,26 @@ io.on('connection', (socket) => {
             return;
         }
 
-        const nombreLimpio = String(nombre || '').trim() || `Jugador ${room.players.length + 1}`;
+        const nombreLimpio = normalizarNombreJugador(
+            nombre,
+            `Jugador ${room.players.length + 1}`
+        );
+        if (nombreYaUsadoEnSala(room.players, nombreLimpio)) {
+            const sugerencias = sugerirNombresAlternativos(room.players, nombreLimpio);
+            const lista = sugerencias.length
+                ? ` Probá con: ${sugerencias.join(', ')}.`
+                : '';
+            const error = `El nombre «${nombreLimpio}» ya está en la sala.${lista}`;
+            console.log(`[Sala ${codeNorm}] join rechazado: nombre duplicado «${nombreLimpio}»`);
+            responder({
+                ok: false,
+                error,
+                code: 'NOMBRE_DUPLICADO',
+                sugerencias
+            });
+            return;
+        }
+
         room.players.push(crearJugadorHumano(socket, nombreLimpio, sessionId));
         cancelarGraciaEliminacion(room);
         socket.data.roomCode = codeNorm;
@@ -466,6 +541,13 @@ io.on('connection', (socket) => {
 
         if (jugadoresListos(room).length < LOBBY_MIN) {
             responder({ ok: false, error: `Se necesitan al menos ${LOBBY_MIN} jugadores (personas o bots).` });
+            return;
+        }
+
+        const claves = jugadoresListos(room).map(p => String(p.nombre || '').trim().toLowerCase());
+        const hayDuplicado = claves.some((c, i) => c && claves.indexOf(c) !== i);
+        if (hayDuplicado) {
+            responder({ ok: false, error: 'Hay nombres repetidos en la sala. Pediles que usen nombres distintos.' });
             return;
         }
 
@@ -750,6 +832,11 @@ function salirDeSala(socket, porDesconexion = false) {
 }
 
 server.listen(PORT, HOST, () => {
-    console.log(`Golpeado multijugador en http://${HOST}:${PORT}`);
-    console.log('Abre la URL en varios dispositivos/navegadores para jugar.');
+    console.log(`Golpeado (HTTP)  → http://${HOST}:${PORT}`);
+});
+
+httpsServer.listen(HTTPS_PORT, HOST, () => {
+    console.log(`Golpeado (HTTPS) → https://${HOST}:${HTTPS_PORT}`);
+    console.log('En el celular usá HTTPS (aceptá el aviso de certificado).');
+    console.log('La vibración de Chrome Android requiere contexto seguro (HTTPS).');
 });

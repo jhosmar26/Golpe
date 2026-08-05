@@ -586,6 +586,10 @@ body {
     margin-bottom: 1.5rem;
 }
 
+.form-group-join {
+    margin-top: 1rem;
+}
+
 .form-group label {
     display: block;
     font-size: 0.9rem;
@@ -686,7 +690,10 @@ body {
 
 .btn-primary:disabled,
 .btn-secondary:disabled,
-.btn-success:disabled {
+.btn-success:disabled,
+.btn-action-robar:disabled,
+.btn-action-descartar:disabled,
+.btn-action-robar-descarte:disabled {
     opacity: 0.45;
     cursor: not-allowed;
     filter: grayscale(0.35);
@@ -1051,6 +1058,21 @@ body:has(.game-container) {
     color: var(--text-muted);
 }
 
+.pile-side-action {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    align-self: center;
+    flex-shrink: 0;
+}
+
+.btn-cantar-mesa {
+    min-height: 2.75rem;
+    padding: 0.55rem 0.9rem;
+    font-size: 0.85rem;
+    white-space: nowrap;
+}
+
 .player-melds {
     display: flex;
     flex-wrap: wrap;
@@ -1061,7 +1083,7 @@ body:has(.game-container) {
     min-width: 0;
 }
 
-.player-melds:not(:has(.meld-group)) {
+.opponent-block .player-melds:not(:has(.meld-group)) {
     display: none;
 }
 
@@ -1082,6 +1104,78 @@ body:has(.game-container) {
 
 .player-dashboard .player-melds {
     margin-bottom: 0.1rem;
+    min-height: 0;
+}
+
+.player-dashboard .player-melds.is-meld-drop-ready,
+.player-dashboard .player-melds.has-staging {
+    display: flex;
+    min-height: 4.75rem;
+    align-items: center;
+    justify-content: center;
+    padding: 0.35rem 0.4rem;
+    border-radius: 12px;
+    border: 1px dashed rgba(255, 255, 255, 0.14);
+    background: rgba(0, 0, 0, 0.12);
+    box-sizing: border-box;
+    transition: border-color 0.15s ease, background 0.15s ease, box-shadow 0.15s ease;
+}
+
+.player-dashboard .player-melds.is-meld-drop-ready.is-drop-hot {
+    border-color: rgba(110, 190, 140, 0.65);
+    background: rgba(40, 90, 55, 0.28);
+    box-shadow: inset 0 0 0 1px rgba(110, 190, 140, 0.25);
+}
+
+.meld-group.meld-staging {
+    border-style: dashed;
+    border-color: rgba(200, 170, 80, 0.55);
+    background: rgba(80, 60, 20, 0.28);
+}
+
+.game-cancel-staging {
+    border-color: rgba(220, 120, 70, 0.55);
+    color: #ffd8c4;
+    background: rgba(120, 50, 30, 0.45);
+}
+
+.game-cancel-staging:hover {
+    border-color: rgba(255, 150, 90, 0.75);
+    color: #fff;
+}
+
+.btn-action-cancel-staging {
+    width: 100%;
+    background: linear-gradient(165deg, #a85a3a 0%, #6e3220 55%, #4a2218 100%);
+    border: 1px solid rgba(230, 140, 100, 0.45);
+    border-radius: 12px;
+    padding: 0.75rem 1.5rem;
+    color: #ffe8dc;
+    font-family: inherit;
+    font-size: 0.95rem;
+    font-weight: 650;
+    cursor: pointer;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+    transition: var(--transition-fast);
+}
+
+.btn-action-cancel-staging:hover {
+    filter: brightness(1.08);
+    transform: translateY(-1px);
+}
+
+.pile-staging-away {
+    opacity: 0.55;
+    font-size: 1.25rem;
+    letter-spacing: 0.1em;
+}
+
+.discard-draggable {
+    cursor: grab;
+}
+
+.discard-draggable.is-dragging {
+    opacity: 0.35;
 }
 
 .meld-group {
@@ -1167,7 +1261,6 @@ body:has(.game-container) {
     width: 100%;
     max-width: 100%;
     min-width: 0;
-    overflow: hidden;
     box-sizing: border-box;
 }
 
@@ -1178,6 +1271,88 @@ body:has(.game-container) {
 
 .player-dashboard.is-waiting {
     opacity: 0.88;
+}
+
+.hand-dock {
+    position: relative;
+    width: 100%;
+    min-width: 0;
+}
+
+/* Franja invisible a todo el ancho: al subir la carta un poco ya entra en descarte */
+.hand-discard-hitbox {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: calc(100% + 3.3rem);
+    height: 3.4rem;
+    z-index: 12;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: transparent;
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+}
+
+.hand-discard-hitbox.is-drag-visible {
+    visibility: visible;
+    opacity: 1;
+    pointer-events: auto;
+}
+
+/* X visible (centrada); el hitbox es el que captura el drop en todo el ancho */
+.hand-discard-target {
+    position: relative;
+    left: auto;
+    bottom: auto;
+    width: 2.35rem;
+    height: 2.35rem;
+    min-width: 2.35rem;
+    padding: 0;
+    border-radius: 999px;
+    border: 1.5px solid rgba(220, 75, 75, 0.45);
+    background: rgba(160, 40, 40, 0.72);
+    color: rgba(255, 255, 255, 0.92);
+    font-size: 1.45rem;
+    font-weight: 700;
+    line-height: 1;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: default;
+    box-shadow: 0 3px 12px rgba(0, 0, 0, 0.22);
+    opacity: 0;
+    pointer-events: none;
+    transform: translateY(12px);
+    transition:
+        opacity 0.28s ease,
+        transform 0.28s ease,
+        background 0.15s ease,
+        border-color 0.15s ease,
+        box-shadow 0.15s ease;
+}
+
+.hand-discard-target span {
+    transform: translateY(-0.05em);
+}
+
+.hand-discard-hitbox.is-drag-visible .hand-discard-target,
+.hand-discard-target.is-drag-visible {
+    opacity: 0.8;
+    transform: translateY(0);
+}
+
+.hand-discard-hitbox.is-drop-hot .hand-discard-target,
+.hand-discard-target.is-drop-hot {
+    opacity: 1;
+    background: rgba(200, 48, 48, 0.92);
+    border-color: rgba(255, 140, 140, 0.75);
+    box-shadow:
+        0 0 0 2px rgba(220, 70, 70, 0.35),
+        0 0 14px rgba(220, 60, 60, 0.4);
+    transform: translateY(0) scale(1.12);
 }
 
 .dashboard-header {
@@ -1195,10 +1370,67 @@ body:has(.game-container) {
 
 .player-actions .btn-primary,
 .player-actions .btn-secondary,
-.player-actions .btn-success {
-    padding: 0.45rem 0.85rem;
-    font-size: 0.85rem;
-    min-height: 40px;
+.player-actions .btn-success,
+.player-actions .btn-action-robar,
+.player-actions .btn-action-descartar,
+.player-actions .btn-action-robar-descarte,
+.player-actions .btn-action-cancel-staging {
+    padding: 0.65rem 1.15rem;
+    font-size: 1rem;
+    min-height: 48px;
+}
+
+/* Acciones de mano: fondos opacos que encajan con el tablero */
+.btn-action-robar,
+.btn-action-robar-descarte {
+    background: linear-gradient(165deg, #2f6b48 0%, #1c4530 55%, #163628 100%);
+    border: 1px solid rgba(110, 190, 140, 0.45);
+    border-radius: 12px;
+    padding: 0.75rem 1.5rem;
+    color: #eaf8ef;
+    font-family: inherit;
+    font-size: 0.95rem;
+    font-weight: 650;
+    cursor: pointer;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+    transition: var(--transition-fast);
+}
+
+.btn-action-robar:hover:not(:disabled),
+.btn-action-robar-descarte:hover:not(:disabled) {
+    filter: brightness(1.08);
+    transform: translateY(-1px);
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.1);
+}
+
+.btn-action-descartar {
+    background: linear-gradient(165deg, #8f3a3c 0%, #5c2428 55%, #451c20 100%);
+    border: 1px solid rgba(220, 120, 120, 0.4);
+    border-radius: 12px;
+    padding: 0.75rem 1.5rem;
+    color: #ffecec;
+    font-family: inherit;
+    font-size: 0.95rem;
+    font-weight: 650;
+    cursor: pointer;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.07);
+    transition: var(--transition-fast);
+}
+
+.btn-action-descartar:hover:not(:disabled) {
+    filter: brightness(1.08);
+    transform: translateY(-1px);
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.1);
+}
+
+.btn-action-robar:disabled,
+.btn-action-descartar:disabled,
+.btn-action-robar-descarte:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+    filter: grayscale(0.35);
+    box-shadow: none;
+    transform: none;
 }
 
 .hand-cards-container {
@@ -1209,6 +1441,7 @@ body:has(.game-container) {
     min-height: 0;
     overflow-x: auto;
     overflow-y: hidden;
+    overflow: visible;
 }
 
 .hand-cards-container .card {
@@ -1835,20 +2068,49 @@ body:has(.game-container) {
 }
 
 .card-drag-ghost.discard-intent-ghost {
-    box-shadow: 0 0 0 1px rgba(220, 60, 60, 0.35), var(--shadow-lg);
+    transform: translate(-50%, -60%) rotate(-18deg) scale(0.82);
+    opacity: 0.98;
+    animation: discardGhostRedBlink 0.55s ease-in-out infinite;
 }
 
-/* Tinte rojo fijo al sacar una carta del panel para descartar */
-.game-container.discard-drag-intent::after {
+@keyframes discardGhostRedBlink {
+    0%, 100% {
+        box-shadow:
+            0 0 0 2px rgba(220, 50, 50, 0.55),
+            0 0 10px rgba(220, 40, 40, 0.35),
+            var(--shadow-lg);
+        filter: brightness(1.02) saturate(1.05);
+        background: #fff;
+    }
+    50% {
+        box-shadow:
+            0 0 0 3px rgba(255, 70, 70, 0.95),
+            0 0 18px rgba(255, 50, 50, 0.7),
+            var(--shadow-lg);
+        filter: brightness(1.18) saturate(1.35);
+        background: rgb(255, 174, 174);
+    }
+}
+
+/* Tinte rojo al sacar una carta del panel para descartar.
+   El ::after/::before deben existir siempre: si solo aparecen con la clase,
+   no hay estado previo y transition no puede interpolar. */
+.game-container::after {
     content: '';
     position: fixed;
     inset: 0;
     z-index: 9000;
     pointer-events: none;
-    background: rgba(200, 45, 45, 0.045);
+    background: rgba(255, 0, 0, 0.137);
+    opacity: 0;
+    transition: opacity .35s ease;
 }
 
-.game-container.discard-drag-intent::before {
+.game-container.discard-drag-intent::after {
+    opacity: 1;
+}
+
+.game-container::before {
     content: 'Descartar';
     position: fixed;
     top: 42%;
@@ -1865,6 +2127,12 @@ body:has(.game-container) {
     font-weight: 650;
     letter-spacing: 0.04em;
     box-shadow: 0 8px 28px rgba(0, 0, 0, 0.35);
+    opacity: 0;
+    transition: opacity .35s ease;
+}
+
+.game-container.discard-drag-intent::before {
+    opacity: 1;
 }
 
 body.is-reordering-cards {
@@ -1903,6 +2171,147 @@ body.is-drawing-from-deck {
     #app {
         padding: 0.75rem;
         max-width: 100%;
+    }
+
+    /* Lobby principal: cabe en una pantalla, sin scroll (también con teclado) */
+    html:has(.home-shell),
+    body:has(.home-shell) {
+        height: 100%;
+        min-height: 0;
+        max-height: 100dvh;
+        overflow: hidden;
+        overscroll-behavior: none;
+    }
+
+    #app:has(.home-shell) {
+        height: 100dvh;
+        min-height: 0;
+        max-height: 100dvh;
+        overflow: hidden;
+        overscroll-behavior: none;
+        padding: 0.25rem 0.4rem;
+        padding-top: max(0.25rem, env(safe-area-inset-top, 0px));
+        padding-bottom: max(0.25rem, env(safe-area-inset-bottom, 0px));
+        box-sizing: border-box;
+    }
+
+    .home-shell {
+        flex: 1 1 auto;
+        min-height: 0;
+        width: 100%;
+        max-width: 100%;
+        margin: 0;
+        justify-content: flex-start;
+        overflow: hidden;
+    }
+
+    .home-shell .lobby-container {
+        flex-grow: 0;
+        width: 100%;
+        max-width: 100%;
+        margin: 0;
+        padding: 0.55rem 0.7rem 0.65rem;
+        border-radius: 14px;
+        box-sizing: border-box;
+        overflow: hidden;
+    }
+
+    .home-shell .lobby-logo {
+        font-size: 1.55rem;
+        margin-bottom: 0;
+        letter-spacing: -0.5px;
+    }
+
+    .home-shell .lobby-subtitle {
+        margin-bottom: 0.45rem;
+        font-size: 0.75rem;
+    }
+
+    .home-shell .form-group {
+        margin-bottom: 0.4rem;
+    }
+
+    .home-shell .form-group-join {
+        margin-top: 0.3rem;
+        margin-bottom: 0.35rem;
+    }
+
+    .home-shell .form-group label {
+        margin-bottom: 0.15rem;
+        font-size: 0.72rem;
+    }
+
+    .home-shell .form-group input {
+        padding: 0.45rem 0.65rem;
+        font-size: 0.9rem;
+        border-radius: 10px;
+    }
+
+    .home-shell .room-code-input {
+        font-size: 1.05rem !important;
+    }
+
+    .home-shell .btn-primary {
+        padding: 0.55rem 0.85rem;
+        font-size: 0.92rem;
+        border-radius: 10px;
+    }
+
+    .home-shell .room-hint {
+        margin: 0.2rem 0 0.2rem;
+        font-size: 0.7rem;
+    }
+
+    .home-shell .lobby-divider {
+        margin: 0.3rem 0;
+        font-size: 0.68rem;
+        gap: 0.4rem;
+    }
+
+    .home-shell .btn-secondary,
+    .home-shell .btn-add-player {
+        margin-bottom: 0.25rem;
+        padding: 0.45rem 0.75rem;
+        font-size: 0.85rem;
+        border-radius: 10px;
+    }
+
+    .home-shell .lobby-error {
+        margin-top: 0.3rem;
+        font-size: 0.75rem;
+        line-height: 1.3;
+    }
+
+    /* Pantallas bajas / teclado abierto: aún más compacto */
+    @media (max-width: 900px) and (max-height: 640px) {
+        .home-shell .lobby-subtitle,
+        .home-shell .room-hint {
+            display: none;
+        }
+
+        .home-shell .lobby-container {
+            padding: 0.4rem 0.55rem 0.5rem;
+        }
+
+        .home-shell .lobby-logo {
+            font-size: 1.35rem;
+        }
+
+        .home-shell .lobby-divider {
+            margin: 0.2rem 0;
+        }
+
+        .home-shell .form-group,
+        .home-shell .form-group-join {
+            margin-bottom: 0.28rem;
+        }
+
+        .home-shell .btn-primary,
+        .home-shell .btn-secondary,
+        .home-shell .btn-add-player {
+            padding: 0.4rem 0.65rem;
+            font-size: 0.82rem;
+        }
     }
 
     .lobby-container {
@@ -1989,6 +2398,12 @@ body.is-drawing-from-deck {
         padding: 0.4rem 0.35rem;
     }
 
+    .btn-cantar-mesa {
+        min-height: 2.35rem;
+        padding: 0.35rem 0.55rem;
+        font-size: 0.72rem;
+    }
+
     .card,
     .pile-empty {
         width: 56px;
@@ -2014,28 +2429,44 @@ body.is-drawing-from-deck {
         border-radius: 12px;
         width: 100%;
         max-width: 100%;
-        overflow: hidden;
         /* sube el panel por encima de la barra de Safari */
         margin-bottom: 0.25rem;
+    }
+
+    .hand-discard-hitbox {
+        height: 3.6rem;
+        bottom: calc(100% - 0.45rem);
+        margin-bottom: 2rem;
+    }
+
+    .hand-discard-target {
+        width: 2.5rem;
+        height: 2.5rem;
+        min-width: 2.5rem;
+        font-size: 1.55rem;
     }
 
     .player-actions {
         width: 100%;
         max-width: 100%;
         flex-wrap: nowrap;
-        gap: 0.3rem;
+        gap: 0.4rem;
         box-sizing: border-box;
     }
 
     .player-actions .btn-primary,
     .player-actions .btn-secondary,
-    .player-actions .btn-success {
+    .player-actions .btn-success,
+    .player-actions .btn-action-robar,
+    .player-actions .btn-action-descartar,
+    .player-actions .btn-action-robar-descarte,
+    .player-actions .btn-action-cancel-staging {
         flex: 1 1 0;
         min-width: 0;
         max-width: 100%;
-        min-height: 38px;
-        padding: 0.4rem 0.35rem;
-        font-size: 0.75rem;
+        min-height: 52px;
+        padding: 0.7rem 0.45rem;
+        font-size: 0.92rem;
         white-space: nowrap;
         overflow: hidden;
         text-overflow: ellipsis;
@@ -2050,7 +2481,7 @@ body.is-drawing-from-deck {
         width: 100%;
         max-width: 100%;
         padding: 0.3rem 0.1rem 0.4rem;
-        overflow: hidden;
+        overflow: visible;
         box-sizing: border-box;
     }
 

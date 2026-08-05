@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <title>Test vibración</title>
+    <style>
+        body {
+            font-family: system-ui, sans-serif;
+            background: #0f1220;
+            color: #eee;
+            display: flex;
+            flex-direction: column;
+            align-items: stretch;
+            justify-content: center;
+            min-height: 100vh;
+            gap: 0.85rem;
+            margin: 0;
+            padding: 1.25rem;
+            box-sizing: border-box;
+        }
+        h1 { font-size: 1.35rem; margin: 0; text-align: center; }
+        .box {
+            background: #1a1f33;
+            border: 1px solid #334;
+            border-radius: 12px;
+            padding: 0.85rem 1rem;
+            font-size: 0.92rem;
+            line-height: 1.45;
+            word-break: break-word;
+        }
+        .ok { color: #6d6; }
+        .bad { color: #f66; }
+        .warn { color: #fc6; }
+        button {
+            font-size: 1.1rem;
+            padding: 1rem 1.25rem;
+            border-radius: 12px;
+            border: 0;
+            background: #7c5cfc;
+            color: #fff;
+            min-height: 3.2rem;
+            touch-action: manipulation;
+        }
+        button.stop { background: #b33; }
+        #log { min-height: 4.5rem; white-space: pre-wrap; font-family: ui-monospace, monospace; font-size: 0.8rem; }
+    </style>
+</head>
+<body>
+    <h1>Test vibración</h1>
+    <div class="box" id="diag"></div>
+    <div class="box" id="log">Tocá un botón abajo con el dedo.</div>
+    <button id="btnPulse" type="button">1) Vibrar 300 ms</button>
+    <button id="btnPattern" type="button">2) Vibrar patrón</button>
+    <button id="btnStop" class="stop" type="button">Parar</button>
+
+    <script>
+        const diag = document.getElementById('diag');
+        const logEl = document.getElementById('log');
+        const hasApi = typeof navigator.vibrate === 'function';
+        const secure = window.isSecureContext;
+        const proto = location.protocol;
+        const host = location.host;
+
+        function line(ok, text) {
+            const cls = ok === true ? 'ok' : ok === false ? 'bad' : 'warn';
+            return `<div class="${cls}">${text}</div>`;
+        }
+
+        diag.innerHTML = [
+            line(secure, `secureContext = ${secure}`),
+            line(proto === 'https:', `url = ${proto}//${host}`),
+            line(hasApi, `navigator.vibrate = ${hasApi ? 'sí' : 'NO'}`),
+            !secure
+                ? line(false, 'Abrí https://TU-IP:3443/vibrate-test.html (no uses :3080).')
+                : line(null, 'HTTPS OK. Tocá un botón y mirá el resultado.')
+        ].join('');
+
+        function log(msg) {
+            logEl.textContent = msg;
+            console.log(msg);
+        }
+
+        function tryVibrate(pattern, label) {
+            if (!hasApi) {
+                log('ERROR: navigator.vibrate no existe');
+                return;
+            }
+            let result;
+            try {
+                result = navigator.vibrate(pattern);
+            } catch (err) {
+                log(`EXCEPCIÓN en ${label}: ${err && err.message}`);
+                return;
+            }
+            log(
+                `${label}\n` +
+                `vibrate(...) devolvió: ${result}\n` +
+                `secureContext: ${secure}\n` +
+                (result
+                    ? 'Chrome aceptó el pedido. Si no sentís nada: Sonido/vibración del sistema o No molestar.'
+                    : 'Chrome rechazó el pedido (gesto/HTTPS/bloqueado).')
+            );
+        }
+
+        function bind(id, pattern, label) {
+            const el = document.getElementById(id);
+            const run = (e) => {
+                e.preventDefault();
+                tryVibrate(pattern, label);
+            };
+            el.addEventListener('pointerdown', run);
+            el.addEventListener('click', run);
+        }
+
+        bind('btnPulse', 5000, 'Vibrar 300ms');
+        bind('btnPattern', [80, 60, 80, 60, 120, 80, 200], 'Patrón');
+        bind('btnStop', 0, 'Parar');
+    </script>
+</body>
+</html>
